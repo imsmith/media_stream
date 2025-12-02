@@ -1,0 +1,103 @@
+@import "tailwindcss" source(none);
+@source "../css";
+@source "../js";
+@source "../../lib/media_stream_web";
+
+@plugin "../vendor/heroicons";
+@plugin "../vendor/daisyui" {
+  themes: false;
+}
+
+@plugin "../vendor/daisyui-theme" {
+  name: "dark";
+  default: false;
+  prefersdark: true;
+  color-scheme: "dark";
+  --color-base-100: oklch(0% 0 0);
+  --color-base-200: oklch(10% 0 0);
+  --color-base-300: oklch(20% 0 0);
+  --color-base-content: oklch(100% 0 0);
+  --color-primary: oklch(100% 0 0);
+  --color-primary-content: oklch(0% 0 0);
+  --color-secondary: oklch(50% 0 0);
+  --color-secondary-content: oklch(100% 0 0);
+  --color-accent: oklch(100% 0 0);
+  --color-accent-content: oklch(0% 0 0);
+  --color-neutral: oklch(30% 0 0);
+  --color-neutral-content: oklch(100% 0 0);
+  --color-info: oklch(70% 0 0);
+  --color-info-content: oklch(0% 0 0);
+  --color-success: oklch(80% 0 0);
+  --color-success-content: oklch(0% 0 0);
+  --color-warning: oklch(80% 0 0);
+  --color-warning-content: oklch(0% 0 0);
+  --color-error: oklch(60% 0 0);
+  --color-error-content: oklch(100% 0 0);
+  --rounded-box: 0;
+  --rounded-btn: 0;
+  --rounded-badge: 0;
+  --animation-btn: 0;
+  --animation-input: 0;
+  --btn-focus-scale: 1;
+  --border-btn: 2px;
+  --tab-border: 2px;
+}
+
+@plugin "../vendor/daisyui-theme" {
+  name: "light";
+  default: true;
+  prefersdark: false;
+  color-scheme: "light";
+  --color-base-100: oklch(100% 0 0);
+  --color-base-200: oklch(95% 0 0);
+  --color-base-300: oklch(90% 0 0);
+  --color-base-content: oklch(0% 0 0);
+  --color-primary: oklch(0% 0 0);
+  --color-primary-content: oklch(100% 0 0);
+  --color-secondary: oklch(50% 0 0);
+  --color-secondary-content: oklch(0% 0 0);
+  --color-accent: oklch(0% 0 0);
+  --color-accent-content: oklch(100% 0 0);
+  --color-neutral: oklch(70% 0 0);
+  --color-neutral-content: oklch(0% 0 0);
+  --color-info: oklch(30% 0 0);
+  --color-info-content: oklch(100% 0 0);
+  --color-success: oklch(20% 0 0);
+  --color-success-content: oklch(100% 0 0);
+  --color-warning: oklch(20% 0 0);
+  --color-warning-content: oklch(100% 0 0);
+  --color-error: oklch(40% 0 0);
+  --color-error-content: oklch(100% 0 0);
+  --rounded-box: 0;
+  --rounded-btn: 0;
+  --rounded-badge: 0;
+  --animation-btn: 0;
+  --animation-input: 0;
+  --btn-focus-scale: 1;
+  --border-btn: 2px;
+  --tab-border: 2px;
+}
+
+/* Custom brutalist overrides */
+* {
+  font-family:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+}
+
+body {
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+}
+
+button,
+input,
+textarea,
+select {
+  border-width: 2px;
+  border-color: currentColor;
+}
+
+button:hover {
+  transform: none;
+}

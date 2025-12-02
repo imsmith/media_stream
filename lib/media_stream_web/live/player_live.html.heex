@@ -1,0 +1,287 @@
+<Layouts.app flash={@flash}>
+  <div class="min-h-screen bg-black text-white font-mono">
+    <!-- Header -->
+    <header class="border-b-4 border-white p-6">
+      <h1 class="text-4xl font-bold tracking-tight">MEDIA_STREAM</h1>
+      <p class="text-sm mt-2 text-gray-400">PERSONAL AUDIO STREAMING SYSTEM</p>
+    </header>
+
+    <div class="flex h-[calc(100vh-120px)]">
+      <!-- Library Section -->
+      <div class="w-1/2 border-r-4 border-white p-6 overflow-y-auto">
+        <div class="mb-6">
+          <label class="block text-xs font-bold mb-2">SEARCH LIBRARY</label>
+          <input
+            type="text"
+            phx-change="search"
+            name="query"
+            value={@search_query}
+            placeholder="SEARCH BY TITLE, ARTIST, ALBUM..."
+            class="w-full bg-white text-black px-4 py-3 border-2 border-black font-mono text-sm focus:outline-none focus:ring-2 focus:ring-white"
+          />
+        </div>
+
+        <div class="mb-4">
+          <h2 class="text-xl font-bold border-b-2 border-white pb-2 mb-4">
+            AUDIO FILES [{length(@filtered_files)}]
+          </h2>
+        </div>
+
+        <%= if @filtered_files == [] do %>
+          <div class="text-center text-gray-500 py-8">
+            <p class="text-sm">NO AUDIO FILES FOUND</p>
+            <p class="text-xs mt-2">Use Media.scan_directory/1 to add files</p>
+          </div>
+        <% else %>
+          <div class="space-y-1">
+            <%= for file <- @filtered_files do %>
+              <div
+                phx-click="add_to_queue"
+                phx-value-id={file.id}
+                class="bg-white text-black p-3 hover:bg-gray-300 cursor-pointer border-2 border-black"
+              >
+                <div class="font-bold text-sm uppercase">{file.title}</div>
+                <div class="text-xs text-gray-700 mt-1">
+                  ARTIST: {file.artist || "UNKNOWN"} • ALBUM: {file.album || "UNKNOWN"} • {format_duration(
+                    file.duration_seconds
+                  )}
+                </div>
+              </div>
+            <% end %>
+          </div>
+        <% end %>
+      </div>
+      
+<!-- Queue + Player Section -->
+      <div class="w-1/2 flex flex-col">
+        <!-- Queue -->
+        <div class="flex-1 p-6 overflow-y-auto border-b-4 border-white">
+          <div class="flex justify-between items-center mb-4">
+            <h2 class="text-xl font-bold border-b-2 border-white pb-2">
+              QUEUE [{length(@queue)}]
+            </h2>
+          </div>
+          
+<!-- Playlist Upload Form -->
+          <form
+            id="playlist-upload-form"
+            phx-submit="load_playlist"
+            phx-change="validate_playlist"
+            class="mb-6 pb-6 border-b-2 border-gray-700"
+          >
+            <label class="block text-xs font-bold mb-2">LOAD PLAYLIST (.M3U / .M3U8)</label>
+            <div class="flex gap-2">
+              <div class="flex-1">
+                <.live_file_input upload={@uploads.playlist} class="hidden" />
+                <label
+                  for={@uploads.playlist.ref}
+                  class="block w-full bg-white text-black px-4 py-3 border-2 border-black font-mono text-sm cursor-pointer hover:bg-gray-300 text-center"
+                >
+                  <%= if @uploads.playlist.entries == [] do %>
+                    [CHOOSE PLAYLIST FILE]
+                  <% else %>
+                    <%= for entry <- @uploads.playlist.entries do %>
+                      {entry.client_name}
+                    <% end %>
+                  <% end %>
+                </label>
+              </div>
+              <%= if @uploads.playlist.entries != [] do %>
+                <button
+                  type="submit"
+                  class="bg-white text-black px-6 py-3 border-2 border-black font-bold hover:bg-gray-300 text-sm focus:outline-none"
+                >
+                  LOAD
+                </button>
+                <%= for entry <- @uploads.playlist.entries do %>
+                  <button
+                    type="button"
+                    phx-click="cancel_upload"
+                    phx-value-ref={entry.ref}
+                    class="bg-gray-800 text-white px-4 py-3 border-2 border-white font-bold hover:bg-gray-700 text-sm focus:outline-none"
+                  >
+                    ✕
+                  </button>
+                <% end %>
+              <% end %>
+            </div>
+            <%= if @upload_error do %>
+              <p class="text-xs text-red-500 mt-2">{@upload_error}</p>
+            <% end %>
+          </form>
+
+          <%= if @queue == [] do %>
+            <div class="text-center text-gray-500 py-8">
+              <p class="text-sm">QUEUE IS EMPTY</p>
+              <p class="text-xs mt-2">Click files from library or load a playlist</p>
+            </div>
+          <% else %>
+            <div class="space-y-1">
+              <%= for {file, index} <- Enum.with_index(@queue) do %>
+                <div class={[
+                  "border-2 p-3 relative",
+                  if(@current_file && @current_file.id == file.id,
+                    do: "bg-gray-800 border-white",
+                    else: "bg-gray-900 border-gray-700"
+                  )
+                ]}>
+                  <%= if @current_file && @current_file.id == file.id do %>
+                    <div class="absolute right-2 top-2 text-xs bg-white text-black px-2 py-1 font-bold">
+                      NOW PLAYING
+                    </div>
+                  <% end %>
+                  <div class="font-bold text-sm uppercase pr-24">{file.title}</div>
+                  <div class="text-xs text-gray-400 mt-1">
+                    {format_duration(file.duration_seconds)}
+                  </div>
+                  <button
+                    phx-click="remove_from_queue"
+                    phx-value-id={file.id}
+                    class="absolute right-2 bottom-2 text-xs text-gray-500 hover:text-white"
+                  >
+                    [X] REMOVE
+                  </button>
+                </div>
+              <% end %>
+            </div>
+          <% end %>
+        </div>
+        
+<!-- Player Controls -->
+        <div class="p-6 bg-gray-900">
+          <%= if @current_file do %>
+            <!-- Hidden Audio Element -->
+            <audio
+              id="audio-player"
+              phx-hook=".AudioPlayer"
+              data-playing={@playing}
+              src={~p"/audio/#{@current_file.id}"}
+              preload="metadata"
+            >
+            </audio>
+            
+<!-- Now Playing Info -->
+            <div class="mb-4 pb-4 border-b-2 border-white">
+              <div class="text-xs font-bold text-gray-400 mb-1">NOW PLAYING</div>
+              <div class="text-lg font-bold uppercase">{@current_file.title}</div>
+              <div class="text-sm text-gray-400">
+                ARTIST: {@current_file.artist || "UNKNOWN"} • ALBUM: {@current_file.album ||
+                  "UNKNOWN"}
+              </div>
+            </div>
+            
+<!-- Progress Bar -->
+            <div class="mb-4">
+              <div class="flex justify-between text-xs mb-2">
+                <span>{format_duration(trunc(@position))}</span>
+                <span>{format_duration(@current_file.duration_seconds)}</span>
+              </div>
+              <div
+                id="progress-bar"
+                phx-click="seek_to_position"
+                class="h-3 bg-white border-2 border-black relative cursor-pointer"
+              >
+                <div
+                  class="absolute top-0 left-0 h-full bg-black pointer-events-none"
+                  style={"width: #{if @current_file.duration_seconds > 0, do: (@position / @current_file.duration_seconds * 100), else: 0}%"}
+                >
+                </div>
+              </div>
+            </div>
+            
+<!-- Control Buttons -->
+            <div class="flex gap-2 justify-center">
+              <button
+                phx-click="prev"
+                class="bg-white text-black px-6 py-3 border-2 border-black font-bold hover:bg-gray-300 text-sm focus:outline-none"
+              >
+                ◀◀ PREV
+              </button>
+              <%= if @playing do %>
+                <button
+                  phx-click="pause"
+                  class="bg-white text-black px-8 py-3 border-2 border-black font-bold hover:bg-gray-300 text-sm focus:outline-none"
+                >
+                  ⏸ PAUSE
+                </button>
+              <% else %>
+                <button
+                  phx-click="resume"
+                  class="bg-white text-black px-8 py-3 border-2 border-black font-bold hover:bg-gray-300 text-sm focus:outline-none"
+                >
+                  ▶ PLAY
+                </button>
+              <% end %>
+              <button
+                phx-click="next"
+                class="bg-white text-black px-6 py-3 border-2 border-black font-bold hover:bg-gray-300 text-sm focus:outline-none"
+              >
+                NEXT ▶▶
+              </button>
+            </div>
+          <% else %>
+            <div class="text-center text-gray-500 py-8">
+              <p class="text-sm">NO TRACK SELECTED</p>
+              <p class="text-xs mt-2">Add files to queue and click to play</p>
+            </div>
+          <% end %>
+          
+<!-- Device Info -->
+          <div class="mt-4 pt-4 border-t-2 border-gray-700 text-xs text-gray-400">
+            <div>DEVICE: {@device_id}</div>
+            <div>SYNC: ENABLED</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+<!-- Collocated JS Hook for Audio Player -->
+  <script :type={Phoenix.LiveView.ColocatedHook} name=".AudioPlayer">
+    export default {
+      mounted() {
+        const audio = this.el;
+
+        // Handle play event
+        audio.addEventListener('play', () => {
+          this.pushEvent('audio_playing', {});
+        });
+
+        // Handle pause event
+        audio.addEventListener('pause', () => {
+          this.pushEvent('audio_paused', {});
+        });
+
+        // Handle time updates
+        audio.addEventListener('timeupdate', () => {
+          this.pushEvent('audio_time_update', {
+            position: audio.currentTime
+          });
+        });
+
+        // Handle track ended
+        audio.addEventListener('ended', () => {
+          this.pushEvent('audio_ended', {});
+        });
+
+        // Handle loaded metadata (for duration)
+        audio.addEventListener('loadedmetadata', () => {
+          this.pushEvent('audio_metadata_loaded', {
+            duration: audio.duration
+          });
+        });
+      },
+
+      updated() {
+        const audio = this.el;
+        const shouldPlay = this.el.dataset.playing === 'true';
+
+        if (shouldPlay && audio.paused) {
+          audio.play().catch(err => console.log('Play failed:', err));
+        } else if (!shouldPlay && !audio.paused) {
+          audio.pause();
+        }
+      }
+    }
+  </script>
+</Layouts.app>

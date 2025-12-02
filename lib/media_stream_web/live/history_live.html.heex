@@ -1,0 +1,130 @@
+<Layouts.app flash={@flash}>
+  <div class="min-h-screen bg-black text-white font-mono">
+    <!-- Header -->
+    <header class="border-b-4 border-white p-6">
+      <h1 class="text-4xl font-bold tracking-tight">LISTENING HISTORY</h1>
+      <p class="text-sm mt-2 text-gray-400">TRACK YOUR LISTENING ACTIVITY</p>
+    </header>
+
+    <div class="p-6">
+      <!-- Search and Filters -->
+      <div class="mb-6 space-y-4">
+        <!-- Search -->
+        <div>
+          <label class="block text-xs font-bold mb-2">SEARCH HISTORY</label>
+          <input
+            type="text"
+            phx-change="search"
+            name="query"
+            value={@search_query}
+            placeholder="SEARCH BY TITLE, ARTIST, ALBUM..."
+            class="w-full bg-white text-black px-4 py-3 border-2 border-black font-mono text-sm focus:outline-none focus:ring-2 focus:ring-white"
+          />
+        </div>
+        
+<!-- Date Range Filter -->
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-bold mb-2">START DATE</label>
+            <input
+              type="date"
+              id="start-date"
+              value={@start_date}
+              class="w-full bg-white text-black px-4 py-3 border-2 border-black font-mono text-sm focus:outline-none focus:ring-2 focus:ring-white"
+            />
+          </div>
+          <div>
+            <label class="block text-xs font-bold mb-2">END DATE</label>
+            <input
+              type="date"
+              id="end-date"
+              value={@end_date}
+              class="w-full bg-white text-black px-4 py-3 border-2 border-black font-mono text-sm focus:outline-none focus:ring-2 focus:ring-white"
+            />
+          </div>
+        </div>
+        
+<!-- Filter Buttons -->
+        <div class="flex gap-2">
+          <button
+            phx-click="filter_by_date"
+            phx-value-start_date={@start_date}
+            phx-value-end_date={@end_date}
+            phx-value-query={@search_query}
+            class="bg-white text-black px-6 py-3 border-2 border-black font-bold hover:bg-gray-300 text-sm focus:outline-none"
+          >
+            APPLY DATE FILTER
+          </button>
+          <button
+            phx-click="toggle_device_filter"
+            class={[
+              "px-6 py-3 border-2 border-black font-bold text-sm focus:outline-none",
+              if(@show_all_devices,
+                do: "bg-white text-black hover:bg-gray-300",
+                else: "bg-gray-800 text-white hover:bg-gray-700"
+              )
+            ]}
+          >
+            {if @show_all_devices, do: "ALL DEVICES", else: "THIS DEVICE ONLY"}
+          </button>
+        </div>
+      </div>
+      
+<!-- History List -->
+      <div class="mb-4">
+        <h2 class="text-xl font-bold border-b-2 border-white pb-2 mb-4">
+          HISTORY [{length(@filtered_history)} ENTRIES]
+        </h2>
+      </div>
+
+      <%= if @filtered_history == [] do %>
+        <div class="text-center text-gray-500 py-8">
+          <p class="text-sm">NO LISTENING HISTORY FOUND</p>
+          <p class="text-xs mt-2">Start playing some tracks to build your history!</p>
+        </div>
+      <% else %>
+        <div class="space-y-1">
+          <%= for entry <- @filtered_history do %>
+            <div class="bg-gray-900 border-2 border-gray-700 p-4">
+              <div class="flex justify-between items-start">
+                <div class="flex-1">
+                  <div class="font-bold text-sm uppercase">{entry.audio_file.title}</div>
+                  <div class="text-xs text-gray-400 mt-1">
+                    ARTIST: {entry.audio_file.artist || "UNKNOWN"} • ALBUM: {entry.audio_file.album ||
+                      "UNKNOWN"}
+                  </div>
+                </div>
+                <div class="text-right text-xs text-gray-400">
+                  <div class="font-bold">{format_datetime(entry.started_at)}</div>
+                  <%= if entry.completed_at do %>
+                    <div class="mt-1">
+                      COMPLETED: {format_datetime(entry.completed_at)}
+                    </div>
+                  <% end %>
+                  <div class="mt-1">
+                    LISTENED: {format_duration(entry.duration_listened_seconds)}
+                  </div>
+                </div>
+              </div>
+              
+<!-- Device Info -->
+              <div class="mt-2 pt-2 border-t border-gray-700 text-xs text-gray-500">
+                DEVICE: {entry.device_id}
+              </div>
+            </div>
+          <% end %>
+        </div>
+      <% end %>
+      
+<!-- Back to Player -->
+      <div class="mt-6">
+        <a
+          href="/"
+          class="inline-block bg-white text-black px-6 py-3 border-2 border-black font-bold hover:bg-gray-300 text-sm"
+        >
+          ← BACK TO PLAYER
+        </a>
+      </div>
+    </div>
+  </div>
+</Layouts.app>
