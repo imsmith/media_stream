@@ -1,0 +1,658 @@
+module media-stream-playback-actions {
+  yang-version 1.1;
+  namespace "urn:media-stream:actions:playback";
+  prefix "playback-act";
+
+  import ietf-yang-types {
+    prefix yang;
+  }
+
+  import media-stream-audio-file {
+    prefix audio;
+  }
+
+  import media-stream-playback-state {
+    prefix playback;
+  }
+
+  organization "MediaStream";
+  description
+    "YANG RPC model for playback control operations.
+
+     Defines all user-facing actions for controlling audio playback
+     including play, pause, resume, seek, and queue navigation.
+
+     Implemented in: MediaStreamWeb.PlayerLive
+     Context functions: MediaStream.Media";
+
+  revision 2025-12-02 {
+    description "Initial version";
+  }
+
+  // Common types
+
+  typedef result-status {
+    type enumeration {
+      enum success {
+        description "Operation completed successfully";
+      }
+      enum error {
+        description "Operation failed";
+      }
+    }
+  }
+
+  grouping common-input {
+    description "Common input parameters for all playback actions";
+
+    leaf device-id {
+      type playback:device-id;
+      mandatory true;
+      description
+        "Device identifier for the requesting client.
+         Generated on session start, stored in LiveView assigns.";
+    }
+  }
+
+  grouping common-output {
+    description "Common output fields for all playback actions";
+
+    leaf status {
+      type result-status;
+      mandatory true;
+      description "Operation result status";
+    }
+
+    leaf message {
+      type string;
+      description "Human-readable result message or error description";
+    }
+
+    container updated-state {
+      description
+        "Updated playback state after operation.
+         Returned to allow UI sync.";
+
+      uses playback-state-summary;
+    }
+  }
+
+  grouping playback-state-summary {
+    description "Summary of current playback state";
+
+    leaf current-file-id {
+      type int64;
+      description "ID of currently playing file (NULL if none)";
+    }
+
+    leaf position-seconds {
+      type decimal64 {
+        fraction-digits 2;
+      }
+      units "seconds";
+      description "Current playback position";
+    }
+
+    leaf-list queue-ids {
+      type int64;
+      ordered-by user;
+      description "Array of audio file IDs in queue order";
+    }
+
+    leaf playing {
+      type boolean;
+      description "Whether audio is currently playing";
+    }
+  }
+
+  // RPC: Play
+
+  rpc play {
+    description
+      "Start playing a selected audio file.
+
+       Behavior:
+       - Sets current_file_id to selected file
+       - Resets position to 0.0
+       - Marks playing state as true
+       - Broadcasts state update via PubSub
+       - Updates database playback_states table
+
+       Triggers:
+       - User clicks play button on file in library
+       - User clicks play button in queue
+
+       Side effects:
+       - Database: UPDATE playback_states
+       - PubSub: Broadcasts :playback_state_updated to 'playback:{device_id}'
+       - UI: Triggers audio element to load and play file";
+
+    input {
+      uses common-input;
+
+      leaf audio-file-id {
+        type leafref {
+          path "/audio:audio-file/audio:id";
+        }
+        mandatory true;
+        description "ID of audio file to play";
+      }
+
+      leaf start-position {
+        type decimal64 {
+          fraction-digits 2;
+        }
+        default 0.0;
+        units "seconds";
+        description
+          "Optional: start playback at specific position.
+           Default: start from beginning (0.0).";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      leaf audio-url {
+        type string;
+        description
+          "URL to stream audio file.
+           Format: /audio/{audio_file_id}";
+      }
+    }
+  }
+
+  // RPC: Pause
+
+  rpc pause {
+    description
+      "Pause current playback.
+
+       Behavior:
+       - Marks playing state as false
+       - Preserves current position
+       - Does not modify current_file_id or queue
+
+       Triggers:
+       - User clicks pause button
+       - Audio element emits 'audio_paused' event
+
+       Side effects:
+       - UI only (no database update for performance)
+       - Audio element pauses playback";
+
+    input {
+      uses common-input;
+
+      leaf save-position {
+        type boolean;
+        default true;
+        description
+          "Whether to save current position to database.
+           Default: true for session persistence.";
+      }
+    }
+
+    output {
+      uses common-output;
+    }
+  }
+
+  // RPC: Resume
+
+  rpc resume {
+    description
+      "Resume playback from paused state.
+
+       Behavior:
+       - Marks playing state as true
+       - Resumes from current position
+       - Does not modify current_file_id or queue
+
+       Triggers:
+       - User clicks play/resume button while paused
+
+       Side effects:
+       - UI only (no database update)
+       - Audio element resumes playback";
+
+    input {
+      uses common-input;
+    }
+
+    output {
+      uses common-output;
+    }
+  }
+
+  // RPC: Seek
+
+  rpc seek {
+    description
+      "Jump to specific position in current track.
+
+       Behavior:
+       - Updates position_seconds in state
+       - Maintains current file and playing status
+       - Broadcasts state update via PubSub
+
+       Triggers:
+       - User drags seek bar
+       - User clicks on seek bar
+
+       Side effects:
+       - Database: UPDATE playback_states SET position_seconds
+       - PubSub: Broadcasts :playback_state_updated
+       - Audio element seeks to new position";
+
+    input {
+      uses common-input;
+
+      leaf position-seconds {
+        type decimal64 {
+          fraction-digits 2;
+          range "0..max";
+        }
+        mandatory true;
+        units "seconds";
+        description
+          "Target position in seconds.
+           Must be >= 0 and <= file duration.";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      leaf actual-position {
+        type decimal64 {
+          fraction-digits 2;
+        }
+        units "seconds";
+        description
+          "Actual position after seek (may be clamped to valid range)";
+      }
+    }
+  }
+
+  // RPC: Next
+
+  rpc next {
+    description
+      "Skip to next track in queue.
+
+       Behavior:
+       - Removes first item from queue
+       - Sets current_file_id to removed item
+       - Resets position to 0.0
+       - Marks playing as true
+       - Broadcasts state update via PubSub
+
+       Triggers:
+       - User clicks next button
+       - Current track ends (audio_ended event)
+
+       Side effects:
+       - Database: UPDATE playback_states (current_file_id, position, queue_json)
+       - PubSub: Broadcasts :playback_state_updated
+       - Audio element loads and plays next file
+       - Creates listening_history entry for completed track";
+
+    input {
+      uses common-input;
+
+      leaf auto-play {
+        type boolean;
+        default true;
+        description
+          "Whether to automatically start playing next track.
+           Default: true for seamless playback.";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      leaf had-next-track {
+        type boolean;
+        description
+          "Whether there was a next track in queue.
+           False if queue was empty.";
+      }
+
+      leaf next-file-id {
+        type int64;
+        description "ID of next file that was loaded (if any)";
+      }
+    }
+  }
+
+  // RPC: Previous
+
+  rpc previous {
+    description
+      "Go to beginning of current track or previous track.
+
+       Behavior:
+       - If position > 3 seconds: reset position to 0.0
+       - If position <= 3 seconds: load previous track (not implemented)
+       - Current implementation: always resets to 0.0
+
+       Triggers:
+       - User clicks previous button
+
+       Side effects:
+       - Database: UPDATE playback_states SET position_seconds = 0.0
+       - PubSub: Broadcasts :playback_state_updated
+       - Audio element seeks to beginning";
+
+    input {
+      uses common-input;
+
+      leaf threshold-seconds {
+        type decimal64 {
+          fraction-digits 1;
+        }
+        default 3.0;
+        units "seconds";
+        description
+          "Position threshold for restart vs. previous track behavior.
+           Not currently used (always restarts current track).";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      leaf action-taken {
+        type enumeration {
+          enum restarted-current {
+            description "Restarted current track from beginning";
+          }
+          enum loaded-previous {
+            description "Loaded previous track (not implemented)";
+          }
+        }
+      }
+    }
+  }
+
+  // RPC: Audio Time Update
+
+  rpc audio-time-update {
+    description
+      "Update current playback position from audio element.
+
+       Behavior:
+       - Updates position_seconds in state
+       - Throttled/debounced to reduce database writes
+       - Broadcasts state update via PubSub
+
+       Triggers:
+       - Audio element 'timeupdate' event (continuous)
+       - Typically fired every 250ms during playback
+
+       Side effects:
+       - Database: UPDATE playback_states SET position_seconds
+         (throttled to reduce load)
+       - PubSub: Broadcasts :playback_state_updated
+         (also throttled)";
+
+    input {
+      uses common-input;
+
+      leaf position-seconds {
+        type decimal64 {
+          fraction-digits 2;
+        }
+        mandatory true;
+        units "seconds";
+        description "Current position reported by audio element";
+      }
+
+      leaf skip-broadcast {
+        type boolean;
+        default false;
+        description
+          "Skip PubSub broadcast for performance.
+           Set to true for throttled updates.";
+      }
+    }
+
+    output {
+      uses common-output;
+    }
+  }
+
+  // RPC: Audio Ended
+
+  rpc audio-ended {
+    description
+      "Handle audio track completion.
+
+       Behavior:
+       - Automatically advances to next track in queue
+       - If queue empty, stops playback
+       - Updates listening history with completion timestamp
+
+       Triggers:
+       - Audio element 'ended' event (track finished)
+
+       Side effects:
+       - Database: UPDATE listening_history SET completed_at
+       - Invokes 'next' RPC internally";
+
+    input {
+      uses common-input;
+
+      leaf completed-file-id {
+        type int64;
+        description "ID of file that just completed";
+      }
+
+      leaf final-position {
+        type decimal64 {
+          fraction-digits 2;
+        }
+        units "seconds";
+        description "Final position when track ended";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      leaf auto-advanced {
+        type boolean;
+        description "Whether auto-advance to next track occurred";
+      }
+    }
+  }
+
+  // RPC: Audio Metadata Loaded
+
+  rpc audio-metadata-loaded {
+    description
+      "Handle audio metadata loaded event.
+
+       Behavior:
+       - Receives duration from audio element
+       - Could update audio_file.duration_seconds if not set
+       - Currently a placeholder implementation
+
+       Triggers:
+       - Audio element 'loadedmetadata' event
+
+       Side effects:
+       - Potential: UPDATE audio_files SET duration_seconds
+         (not currently implemented)";
+
+    input {
+      uses common-input;
+
+      leaf audio-file-id {
+        type int64;
+        mandatory true;
+        description "ID of file whose metadata loaded";
+      }
+
+      leaf duration-seconds {
+        type decimal64 {
+          fraction-digits 2;
+        }
+        units "seconds";
+        description "Duration reported by audio element";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      leaf duration-updated {
+        type boolean;
+        description "Whether audio_file duration was updated in database";
+      }
+    }
+  }
+
+  // Queue management actions
+
+  rpc add-to-queue {
+    description
+      "Add audio file to end of playback queue.
+
+       Behavior:
+       - Appends file ID to queue_json array
+       - Updates playback_states table
+       - Broadcasts state update via PubSub
+
+       Triggers:
+       - User clicks 'Add to Queue' button on file
+
+       Side effects:
+       - Database: UPDATE playback_states SET queue_json
+       - PubSub: Broadcasts :playback_state_updated";
+
+    input {
+      uses common-input;
+
+      leaf audio-file-id {
+        type leafref {
+          path "/audio:audio-file/audio:id";
+        }
+        mandatory true;
+        description "ID of file to add to queue";
+      }
+
+      leaf position {
+        type enumeration {
+          enum end {
+            description "Add to end of queue (default)";
+          }
+          enum next {
+            description "Add as next track (after current)";
+          }
+        }
+        default end;
+      }
+    }
+
+    output {
+      uses common-output;
+
+      leaf queue-length {
+        type uint32;
+        description "Queue length after adding";
+      }
+    }
+  }
+
+  rpc remove-from-queue {
+    description
+      "Remove audio file from playback queue.
+
+       Behavior:
+       - Removes file ID from queue_json array
+       - Preserves order of remaining items
+       - Updates playback_states table
+       - Broadcasts state update via PubSub
+
+       Triggers:
+       - User clicks remove button on queued item
+
+       Side effects:
+       - Database: UPDATE playback_states SET queue_json
+       - PubSub: Broadcasts :playback_state_updated";
+
+    input {
+      uses common-input;
+
+      leaf audio-file-id {
+        type int64;
+        mandatory true;
+        description "ID of file to remove from queue";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      leaf was-in-queue {
+        type boolean;
+        description "Whether file was actually in queue";
+      }
+
+      leaf queue-length {
+        type uint32;
+        description "Queue length after removal";
+      }
+    }
+  }
+
+  // Error conditions
+
+  typedef error-code {
+    type enumeration {
+      enum file-not-found {
+        description "Audio file does not exist in database";
+      }
+      enum file-missing-on-disk {
+        description "Audio file path does not exist on filesystem";
+      }
+      enum invalid-position {
+        description "Seek position is out of valid range";
+      }
+      enum queue-empty {
+        description "Attempted next/previous with empty queue";
+      }
+      enum device-not-found {
+        description "Playback state for device does not exist";
+      }
+      enum database-error {
+        description "Database operation failed";
+      }
+      enum pubsub-error {
+        description "PubSub broadcast failed";
+      }
+    }
+  }
+
+  grouping error-response {
+    description "Error response structure";
+
+    leaf error-code {
+      type error-code;
+      mandatory true;
+    }
+
+    leaf error-message {
+      type string;
+      description "Human-readable error description";
+    }
+
+    leaf details {
+      type string;
+      description "Technical details for debugging";
+    }
+  }
+}

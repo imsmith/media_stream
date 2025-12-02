@@ -1,0 +1,368 @@
+module media-stream-listening-history {
+  yang-version 1.1;
+  namespace "urn:media-stream:models:listening-history";
+  prefix "history";
+
+  import ietf-yang-types {
+    prefix yang;
+  }
+
+  import media-stream-audio-file {
+    prefix audio;
+  }
+
+  import media-stream-playback-state {
+    prefix playback;
+  }
+
+  organization "MediaStream";
+  description
+    "YANG data model for ListeningHistory schema.
+
+     Tracks listening events including which audio file was played,
+     by which device, when started, and duration listened.
+     Used for analytics, recommendations, and resume functionality.
+
+     Corresponds to Ecto schema: MediaStream.Media.ListeningHistory
+     Database table: listening_history";
+
+  revision 2025-12-02 {
+    description "Initial version";
+  }
+
+  // Extension for Ecto-specific database indexing
+  extension ecto-index {
+    description "Marks field as indexed in database";
+  }
+
+  container listening-history {
+    description
+      "A single listening history record.
+
+       Created when a user starts playing an audio file.
+       May be updated when playback completes with duration listened.
+       Each play session creates a new record.";
+
+    leaf id {
+      type int64;
+      mandatory true;
+      description
+        "Auto-incremented primary key.
+         Database type: INTEGER PRIMARY KEY";
+    }
+
+    leaf audio-file-id {
+      type leafref {
+        path "/audio:audio-file/audio:id";
+      }
+      mandatory true;
+      history:ecto-index;
+      description
+        "Foreign key to the audio file that was played.
+         Database type: INTEGER NOT NULL
+         Foreign key: references audio_files(id)
+         On delete: DELETE_ALL (cascade delete history when file deleted)
+         Indexed for efficient querying by file.";
+    }
+
+    leaf device-id {
+      type playback:device-id;
+      mandatory true;
+      history:ecto-index;
+      description
+        "Device identifier that played this audio file.
+         Links listening session to specific device/browser.
+         Database type: STRING NOT NULL
+         Indexed for device-specific history queries.";
+    }
+
+    leaf started-at {
+      type yang:date-and-time;
+      mandatory true;
+      history:ecto-index;
+      description
+        "Timestamp when playback started.
+         Used for temporal queries and sorting history.
+         Database type: DATETIME (UTC) NOT NULL
+         Indexed for date range filtering.";
+    }
+
+    leaf completed-at {
+      type yang:date-and-time;
+      history:ecto-index;
+      description
+        "Timestamp when playback completed or stopped.
+         NULL if playback is ongoing or was interrupted.
+         Database type: DATETIME (UTC)
+         Indexed for completion status queries.";
+    }
+
+    leaf duration-listened-seconds {
+      type int32 {
+        range "0..max";
+      }
+      default 0;
+      units "seconds";
+      description
+        "Total seconds listened before stopping or completing.
+         May be less than file duration if user skipped ahead.
+         Database type: INTEGER DEFAULT 0";
+    }
+
+    leaf inserted-at {
+      type yang:date-and-time;
+      mandatory true;
+      description
+        "Timestamp when record was created.
+         Automatically set by Ecto timestamps().
+         Database type: DATETIME (UTC)";
+    }
+
+    leaf updated-at {
+      type yang:date-and-time;
+      mandatory true;
+      description
+        "Timestamp when record was last updated.
+         Updated when completed_at or duration_listened_seconds changes.
+         Automatically updated by Ecto timestamps().
+         Database type: DATETIME (UTC)";
+    }
+  }
+
+  // Query patterns
+
+  grouping date-range-filter {
+    description "Filter listening history by date range";
+
+    leaf start-date {
+      type yang:date-and-time;
+      description "Include records where started_at >= start_date";
+    }
+
+    leaf end-date {
+      type yang:date-and-time;
+      description "Include records where started_at <= end_date";
+    }
+  }
+
+  grouping search-filter {
+    description "Search history by audio file metadata";
+
+    leaf query {
+      type string;
+      description
+        "Search query string for audio file metadata.
+         Searches across: title, artist, album.
+         Uses case-insensitive substring matching.";
+    }
+  }
+
+  grouping device-filter {
+    description "Filter by device";
+
+    leaf device-id {
+      type playback:device-id;
+      description
+        "Optional: filter to specific device.
+         Omit to see all devices' history.";
+    }
+
+    leaf current-device-only {
+      type boolean;
+      default false;
+      description
+        "If true, show only current device's history.
+         If false, show all devices.";
+    }
+  }
+
+  grouping completion-filter {
+    description "Filter by completion status";
+
+    leaf completion-status {
+      type enumeration {
+        enum all {
+          description "All listening sessions";
+        }
+        enum completed {
+          description "Only sessions with completed_at set";
+        }
+        enum incomplete {
+          description "Only sessions without completed_at (NULL)";
+        }
+        enum in-progress {
+          description "Sessions started recently without completion";
+        }
+      }
+      default all;
+    }
+  }
+
+  // Sorting and pagination
+
+  grouping sort-order {
+    description "Sort order for history results";
+
+    leaf order-by {
+      type enumeration {
+        enum most-recent {
+          description "started_at DESC (default)";
+        }
+        enum oldest-first {
+          description "started_at ASC";
+        }
+        enum longest-duration {
+          description "duration_listened_seconds DESC";
+        }
+        enum by-title {
+          description "audio_file.title ASC";
+        }
+        enum by-artist {
+          description "audio_file.artist ASC";
+        }
+      }
+      default most-recent;
+    }
+  }
+
+  grouping pagination {
+    description "Pagination parameters for large result sets";
+
+    leaf limit {
+      type uint32;
+      default 100;
+      description "Maximum number of results to return";
+    }
+
+    leaf offset {
+      type uint32;
+      default 0;
+      description "Number of results to skip";
+    }
+  }
+
+  // Relationships
+
+  grouping relationships {
+    description "Foreign key relationships for listening history";
+
+    container belongs-to {
+      description "Belongs-to associations";
+
+      container audio-file {
+        description
+          "Association to the audio file that was played.
+           Required (cannot be NULL).";
+
+        leaf foreign-key {
+          type string;
+          default "audio_file_id";
+        }
+
+        leaf references {
+          type string;
+          default "audio_files.id";
+        }
+
+        leaf on-delete {
+          type enumeration {
+            enum delete-all;
+          }
+          default delete-all;
+          description
+            "Cascade delete: remove history when audio file is deleted.
+             Maintains referential integrity.";
+        }
+
+        leaf preload {
+          type boolean;
+          default true;
+          description
+            "Audio file is typically preloaded when querying history.
+             Needed to display title, artist, album in history list.";
+        }
+      }
+    }
+  }
+
+  // Validation and constraints
+
+  grouping validation-rules {
+    description "Validation rules for listening history records";
+
+    container constraints {
+      description "Database and business logic constraints";
+
+      leaf audio-file-id-required {
+        type boolean;
+        default true;
+        description "Audio file ID is mandatory";
+      }
+
+      leaf device-id-required {
+        type boolean;
+        default true;
+        description "Device ID is mandatory";
+      }
+
+      leaf started-at-required {
+        type boolean;
+        default true;
+        description "Start timestamp is mandatory";
+      }
+
+      leaf duration-non-negative {
+        type boolean;
+        default true;
+        description "Duration cannot be negative";
+      }
+
+      leaf completed-after-started {
+        type boolean;
+        default true;
+        description
+          "If completed_at is set, it must be >= started_at.
+           Validated at application level.";
+      }
+    }
+  }
+
+  // Analytics and aggregation (for documentation)
+
+  grouping analytics-metrics {
+    description
+      "Metrics that can be derived from listening history.
+       Not stored in database, computed on query.";
+
+    container metrics {
+      leaf total-plays {
+        type uint64;
+        description "Count of listening history records";
+      }
+
+      leaf total-time-listened {
+        type uint64;
+        units "seconds";
+        description "Sum of duration_listened_seconds";
+      }
+
+      leaf unique-files-played {
+        type uint32;
+        description "Distinct count of audio_file_id";
+      }
+
+      leaf most-played-file-id {
+        type int64;
+        description "audio_file_id with most plays";
+      }
+
+      leaf average-session-duration {
+        type decimal64 {
+          fraction-digits 2;
+        }
+        units "seconds";
+        description "Average duration per listening session";
+      }
+    }
+  }
+}

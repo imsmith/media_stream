@@ -1,0 +1,53 @@
+sequenceDiagram
+    participant Browser1 as Browser Tab 1
+    participant Browser2 as Browser Tab 2
+    participant LiveView1 as PlayerLive (Tab 1)
+    participant LiveView2 as PlayerLive (Tab 2)
+    participant Media as Media Context
+    participant PubSub as Phoenix PubSub
+    participant DB as SQLite Database
+
+    Note over Browser1,Browser2: Same Device ID (A1B2C3D4E5F6G7H8)
+
+    Browser1->>LiveView1: Mount (connect)
+    LiveView1->>LiveView1: Generate/retrieve device_id
+    LiveView1->>PubSub: Subscribe to "playback:A1B2C3D4E5F6G7H8"
+    LiveView1->>DB: Load playback state
+    DB-->>LiveView1: Current state (file, position, queue)
+
+    Browser2->>LiveView2: Mount (connect) - different tab
+    LiveView2->>LiveView2: Retrieve same device_id from session
+    LiveView2->>PubSub: Subscribe to "playback:A1B2C3D4E5F6G7H8"
+    LiveView2->>DB: Load playback state
+    DB-->>LiveView2: Current state (synced)
+
+    Note over Browser1,LiveView2: User clicks play in Tab 1
+
+    Browser1->>LiveView1: handle_event("play", %{id: 42})
+    LiveView1->>Media: update_playback_state(device_id, %{current_file_id: 42, position: 0.0})
+    Media->>DB: UPDATE playback_states SET current_file_id=42, position_seconds=0.0
+    DB-->>Media: {:ok, playback_state}
+    Media->>PubSub: broadcast("playback:A1B2C3D4E5F6G7H8", {:playback_state_updated, state})
+    Media-->>LiveView1: {:ok, playback_state}
+    LiveView1-->>Browser1: Update UI (playing file #42)
+
+    PubSub-->>LiveView1: {:playback_state_updated, state}
+    Note over LiveView1: Receives own broadcast (ignored or used for confirmation)
+
+    PubSub-->>LiveView2: {:playback_state_updated, state}
+    LiveView2->>LiveView2: handle_info({:playback_state_updated, state})
+    LiveView2-->>Browser2: Update UI (sync to file #42)
+    Browser2->>Browser2: Audio element auto-loads and plays
+
+    Note over Browser1,Browser2: Both tabs now playing same file in sync
+
+    Browser1->>LiveView1: handle_event("seek", %{position: 45.2})
+    LiveView1->>Media: update_playback_state(device_id, %{position_seconds: 45.2})
+    Media->>DB: UPDATE playback_states SET position_seconds=45.2
+    Media->>PubSub: broadcast("playback:A1B2C3D4E5F6G7H8", {:playback_state_updated, state})
+
+    PubSub-->>LiveView2: {:playback_state_updated, state}
+    LiveView2-->>Browser2: Update position to 45.2s
+    Browser2->>Browser2: Audio seeks to 45.2s
+
+    Note over Browser1,Browser2: Position synced across tabs

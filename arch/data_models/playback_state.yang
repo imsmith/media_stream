@@ -1,0 +1,290 @@
+module media-stream-playback-state {
+  yang-version 1.1;
+  namespace "urn:media-stream:models:playback-state";
+  prefix "playback";
+
+  import ietf-yang-types {
+    prefix yang;
+  }
+
+  import media-stream-audio-file {
+    prefix audio;
+  }
+
+  organization "MediaStream";
+  description
+    "YANG data model for PlaybackState schema.
+
+     Represents per-device playback state including current file,
+     position, and playback queue. Enables multi-device synchronization
+     and session persistence.
+
+     Corresponds to Ecto schema: MediaStream.Media.PlaybackState
+     Database table: playback_states";
+
+  revision 2025-12-02 {
+    description "Initial version";
+  }
+
+  // Extension for Ecto-specific database indexing
+  extension ecto-index {
+    description "Marks field as indexed in database";
+  }
+
+  extension ecto-unique {
+    description "Marks field as having unique constraint";
+  }
+
+  typedef device-id {
+    type string {
+      length "16";
+      pattern "[0-9A-F]{16}";
+    }
+    description
+      "Unique device identifier.
+       Generated as 8 random bytes encoded as uppercase hexadecimal.
+       Example: 'A1B2C3D4E5F6G7H8'";
+  }
+
+  container playback-state {
+    description
+      "Playback state record for a specific device.
+
+       Each device (browser session) has one playback state record.
+       Synchronized across tabs/windows via Phoenix PubSub.
+       Persisted to enable session restoration after page reload.";
+
+    leaf id {
+      type int64;
+      mandatory true;
+      description
+        "Auto-incremented primary key.
+         Database type: INTEGER PRIMARY KEY";
+    }
+
+    leaf device-id {
+      type device-id;
+      mandatory true;
+      playback:ecto-unique;
+      description
+        "Unique device identifier for this playback state.
+         One record per device_id.
+         Database type: STRING NOT NULL UNIQUE
+         Ecto constraint: unique_constraint(:device_id)";
+    }
+
+    leaf current-file-id {
+      type leafref {
+        path "/audio:audio-file/audio:id";
+      }
+      description
+        "Foreign key to currently playing audio file.
+         NULL if no file is currently selected.
+         Database type: INTEGER
+         Foreign key: references audio_files(id)
+         On delete: NILIFY_ALL (set to NULL if audio file deleted)
+         Ecto constraint: foreign_key_constraint(:current_file_id)";
+    }
+
+    leaf position-seconds {
+      type decimal64 {
+        fraction-digits 2;
+        range "0..max";
+      }
+      default 0.0;
+      units "seconds";
+      description
+        "Current playback position in seconds.
+         Updated continuously during playback (throttled via debouncing).
+         Sub-second precision for accurate seeking.
+         Database type: FLOAT DEFAULT 0.0";
+    }
+
+    leaf queue-json {
+      type string;
+      description
+        "JSON-serialized array of audio file IDs in queue order.
+         Format: '[1, 5, 12, 3]'
+         Empty queue: '[]' or NULL
+         Database type: TEXT
+
+         Note: Stored as JSON string for simplicity.
+         Future enhancement: model as structured list.";
+    }
+
+    leaf inserted-at {
+      type yang:date-and-time;
+      mandatory true;
+      description
+        "Timestamp when playback state was first created.
+         Automatically set by Ecto timestamps().
+         Database type: DATETIME (UTC)";
+    }
+
+    leaf updated-at {
+      type yang:date-and-time;
+      mandatory true;
+      description
+        "Timestamp when playback state was last modified.
+         Updated on any state change (play, pause, seek, queue change).
+         Automatically updated by Ecto timestamps().
+         Database type: DATETIME (UTC)";
+    }
+  }
+
+  // Queue structure (for documentation, actual storage is JSON)
+
+  grouping queue-structure {
+    description
+      "Logical structure of playback queue.
+       Physically stored as JSON in queue-json field.";
+
+    list queue-items {
+      key "audio-file-id";
+      ordered-by user;
+      description
+        "Ordered list of audio files in playback queue.
+         Order determines playback sequence.";
+
+      leaf audio-file-id {
+        type leafref {
+          path "/audio:audio-file/audio:id";
+        }
+        description "Reference to audio file in queue";
+      }
+
+      leaf position {
+        type uint32;
+        description
+          "Position in queue (0-indexed).
+           Determines playback order.";
+      }
+    }
+  }
+
+  // PubSub synchronization
+
+  grouping pubsub-config {
+    description
+      "Configuration for real-time state synchronization via Phoenix PubSub.";
+
+    leaf pubsub-topic {
+      type string;
+      description
+        "PubSub topic for this device.
+         Format: 'playback:{device_id}'
+         Example: 'playback:A1B2C3D4E5F6G7H8'";
+    }
+
+    leaf broadcast-event {
+      type string;
+      default "playback_state_updated";
+      description
+        "Event name for state update broadcasts.
+         Subscribers receive {:playback_state_updated, %PlaybackState{}}";
+    }
+
+    leaf-list triggers {
+      type enumeration {
+        enum play { description "File started playing"; }
+        enum pause { description "Playback paused"; }
+        enum seek { description "Position changed"; }
+        enum next { description "Advanced to next track"; }
+        enum queue-add { description "Track added to queue"; }
+        enum queue-remove { description "Track removed from queue"; }
+      }
+      description
+        "Actions that trigger PubSub broadcast.
+         All state mutations broadcast to subscribers.";
+    }
+  }
+
+  // Validation and constraints
+
+  grouping validation-rules {
+    description "Validation rules for playback state records";
+
+    container constraints {
+      description "Database and business logic constraints";
+
+      leaf device-id-required {
+        type boolean;
+        default true;
+        description "Device ID field is mandatory";
+      }
+
+      leaf device-id-unique {
+        type boolean;
+        default true;
+        description "One playback state per device";
+      }
+
+      leaf position-non-negative {
+        type boolean;
+        default true;
+        description "Position cannot be negative";
+      }
+
+      leaf queue-json-valid {
+        type boolean;
+        default true;
+        description
+          "Queue JSON must be valid array of integers.
+           Validated at application level, not database.";
+      }
+    }
+  }
+
+  // Relationships
+
+  grouping relationships {
+    description "Foreign key relationships for playback state";
+
+    container belongs-to {
+      description "Belongs-to associations";
+
+      container current-file {
+        description
+          "Association to currently playing audio file.
+           Optional (can be NULL if no file playing).";
+
+        leaf foreign-key {
+          type string;
+          default "current_file_id";
+        }
+
+        leaf references {
+          type string;
+          default "audio_files.id";
+        }
+
+        leaf on-delete {
+          type enumeration {
+            enum nilify-all;
+          }
+          default nilify-all;
+          description "Set to NULL when audio file is deleted";
+        }
+      }
+    }
+  }
+
+  // State machine (for documentation)
+
+  typedef playback-status {
+    type enumeration {
+      enum idle {
+        description "No file selected";
+      }
+      enum playing {
+        description "Currently playing audio";
+      }
+      enum paused {
+        description "Playback paused";
+      }
+    }
+    description
+      "Playback status (derived, not stored).
+       Determined by presence of current_file_id and client state.";
+  }
+}

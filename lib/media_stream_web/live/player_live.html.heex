@@ -9,6 +9,29 @@
     <div class="flex h-[calc(100vh-120px)]">
       <!-- Library Section -->
       <div class="w-1/2 border-r-4 border-white p-6 overflow-y-auto">
+        <!-- Directory Scanner Form -->
+        <form phx-submit="scan_directory" phx-change="update_directory_path" class="mb-6 pb-6 border-b-2 border-gray-700">
+          <label class="block text-xs font-bold mb-2">ADD MUSIC DIRECTORY</label>
+          <div class="flex gap-2">
+            <input
+              type="text"
+              name="directory_path"
+              value={@directory_path}
+              placeholder="/PATH/TO/MUSIC/FOLDER..."
+              class="flex-1 bg-white text-black px-4 py-3 border-2 border-black font-mono text-sm focus:outline-none focus:ring-2 focus:ring-white"
+            />
+            <button
+              type="submit"
+              class="bg-white text-black px-6 py-3 border-2 border-black font-bold hover:bg-gray-300 text-sm focus:outline-none"
+            >
+              SCAN
+            </button>
+          </div>
+          <%= if @scan_status do %>
+            <p class="text-xs text-gray-400 mt-2">{@scan_status}</p>
+          <% end %>
+        </form>
+
         <div class="mb-6">
           <label class="block text-xs font-bold mb-2">SEARCH LIBRARY</label>
           <input
@@ -30,7 +53,7 @@
         <%= if @filtered_files == [] do %>
           <div class="text-center text-gray-500 py-8">
             <p class="text-sm">NO AUDIO FILES FOUND</p>
-            <p class="text-xs mt-2">Use Media.scan_directory/1 to add files</p>
+            <p class="text-xs mt-2">Use the form above to scan a music directory</p>
           </div>
         <% else %>
           <div class="space-y-1">
@@ -119,12 +142,14 @@
             <div class="space-y-1">
               <%= for {file, index} <- Enum.with_index(@queue) do %>
                 <div class={[
-                  "border-2 p-3 relative",
+                  "border-2 p-3 relative cursor-pointer hover:bg-gray-800",
                   if(@current_file && @current_file.id == file.id,
                     do: "bg-gray-800 border-white",
                     else: "bg-gray-900 border-gray-700"
                   )
-                ]}>
+                ]}
+                phx-click="play"
+                phx-value-id={file.id}>
                   <%= if @current_file && @current_file.id == file.id do %>
                     <div class="absolute right-2 top-2 text-xs bg-white text-black px-2 py-1 font-bold">
                       NOW PLAYING
@@ -137,6 +162,7 @@
                   <button
                     phx-click="remove_from_queue"
                     phx-value-id={file.id}
+                    onclick="event.stopPropagation()"
                     class="absolute right-2 bottom-2 text-xs text-gray-500 hover:text-white"
                   >
                     [X] REMOVE

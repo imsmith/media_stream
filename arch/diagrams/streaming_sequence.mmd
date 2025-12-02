@@ -1,0 +1,72 @@
+sequenceDiagram
+    participant Browser as Browser Audio Element
+    participant Controller as AudioController
+    participant FS as Filesystem
+    participant DB as Database
+
+    Note over Browser,FS: Initial Request - Full File
+
+    Browser->>Controller: GET /audio/42
+    Controller->>DB: Get audio_file by id=42
+    DB-->>Controller: %AudioFile{path: "/music/song.mp3", file_size: 5242880}
+    Controller->>FS: Check File.exists?("/music/song.mp3")
+    FS-->>Controller: true
+    Controller->>FS: File.stat!("/music/song.mp3")
+    FS-->>Controller: %{size: 5242880}
+
+    Note over Controller: No Range header, send full file
+
+    Controller->>Controller: Set headers:<br/>Content-Type: audio/mpeg<br/>Accept-Ranges: bytes<br/>Content-Length: 5242880
+    Controller->>Browser: 200 OK + send_file(full file)
+    Browser->>Browser: Load and play audio
+
+    Note over Browser,FS: Seek Operation - Range Request
+
+    Browser->>Controller: GET /audio/42<br/>Range: bytes=1048576-2097151
+    Controller->>DB: Get audio_file by id=42
+    DB-->>Controller: %AudioFile{path: "/music/song.mp3"}
+    Controller->>FS: File.stat!("/music/song.mp3")
+    FS-->>Controller: %{size: 5242880}
+
+    Controller->>Controller: Parse range "1048576-2097151"<br/>start_byte = 1048576<br/>end_byte = 2097151<br/>content_length = 1048576
+
+    Note over Controller: Range request, send partial content
+
+    Controller->>Controller: Set headers:<br/>Content-Type: audio/mpeg<br/>Accept-Ranges: bytes<br/>Content-Range: bytes 1048576-2097151/5242880<br/>Content-Length: 1048576
+    Controller->>Browser: 206 Partial Content + send_file(offset, length)
+    Browser->>Browser: Audio seeks to requested position
+
+    Note over Browser,FS: Range Request - From Byte to End
+
+    Browser->>Controller: GET /audio/42<br/>Range: bytes=4194304-
+    Controller->>DB: Get audio_file by id=42
+    DB-->>Controller: %AudioFile{path: "/music/song.mp3"}
+    Controller->>FS: File.stat!("/music/song.mp3")
+    FS-->>Controller: %{size: 5242880}
+
+    Controller->>Controller: Parse range "4194304-"<br/>start_byte = 4194304<br/>end_byte = 5242879 (file_size - 1)<br/>content_length = 1048576
+
+    Controller->>Controller: Set headers:<br/>Content-Range: bytes 4194304-5242879/5242880<br/>Content-Length: 1048576
+    Controller->>Browser: 206 Partial Content + send_file(offset, length)
+
+    Note over Browser,FS: Range Request - Last N Bytes
+
+    Browser->>Controller: GET /audio/42<br/>Range: bytes=-524288
+    Controller->>DB: Get audio_file by id=42
+    DB-->>Controller: %AudioFile{path: "/music/song.mp3"}
+    Controller->>FS: File.stat!("/music/song.mp3")
+    FS-->>Controller: %{size: 5242880}
+
+    Controller->>Controller: Parse range "-524288"<br/>start_byte = 4718592 (file_size - 524288)<br/>end_byte = 5242879<br/>content_length = 524288
+
+    Controller->>Controller: Set headers:<br/>Content-Range: bytes 4718592-5242879/5242880<br/>Content-Length: 524288
+    Controller->>Browser: 206 Partial Content + send_file(offset, length)
+
+    Note over Browser,FS: File Not Found on Disk
+
+    Browser->>Controller: GET /audio/99
+    Controller->>DB: Get audio_file by id=99
+    DB-->>Controller: %AudioFile{path: "/deleted/song.mp3"}
+    Controller->>FS: File.exists?("/deleted/song.mp3")
+    FS-->>Controller: false
+    Controller->>Browser: 404 Not Found<br/>"File not found"

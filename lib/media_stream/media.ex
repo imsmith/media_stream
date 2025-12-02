@@ -98,15 +98,30 @@ defmodule MediaStream.Media do
         File.regular?(path) && Path.extname(path) in audio_extensions
       end)
 
+    # Process files in parallel for much faster scanning
     results =
-      Enum.reduce(files, %{scanned: 0, added: 0, skipped: 0}, fn file_path, acc ->
-        case create_audio_file_from_path(file_path) do
-          {:ok, _audio_file} ->
-            %{acc | scanned: acc.scanned + 1, added: acc.added + 1}
+      files
+      |> Task.async_stream(
+        fn file_path ->
+          case create_audio_file_from_path(file_path) do
+            {:ok, _audio_file} -> {:added, 1}
+            {:error, _changeset} -> {:skipped, 1}
+          end
+        end,
+        max_concurrency: System.schedulers_online(),
+        timeout: 10_000,
+        ordered: false
+      )
+      |> Enum.reduce(%{scanned: 0, added: 0, skipped: 0}, fn
+        {:ok, {:added, count}}, acc ->
+          %{acc | scanned: acc.scanned + count, added: acc.added + count}
 
-          {:error, _changeset} ->
-            %{acc | scanned: acc.scanned + 1, skipped: acc.skipped + 1}
-        end
+        {:ok, {:skipped, count}}, acc ->
+          %{acc | scanned: acc.scanned + count, skipped: acc.skipped + count}
+
+        {:exit, _reason}, acc ->
+          # File timed out or crashed, count as skipped
+          %{acc | scanned: acc.scanned + 1, skipped: acc.skipped + 1}
       end)
 
     {:ok, results}
@@ -117,17 +132,98 @@ defmodule MediaStream.Media do
     file_type = Path.extname(file_path)
     file_size = File.stat!(file_path).size
 
+    # Extract metadata from filename and directory structure
+    metadata = extract_metadata_from_path(file_path, file_name)
+
+    # Extract duration from audio file
+    duration = extract_duration(file_path)
+
     attrs = %{
       path: file_path,
-      title: file_name,
-      artist: "Unknown",
-      album: "Unknown",
-      duration_seconds: 0,
+      title: metadata.title,
+      artist: metadata.artist,
+      album: metadata.album,
+      duration_seconds: duration,
       file_type: file_type,
       file_size: file_size
     }
 
     create_audio_file(attrs)
+  end
+
+  # Extracts duration from audio file using ffprobe.
+  # Returns duration in seconds (integer) or 0 if extraction fails.
+  defp extract_duration(file_path) do
+    case System.cmd("ffprobe", [
+      "-v", "error",
+      "-show_entries", "format=duration",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      file_path
+    ], stderr_to_stdout: true) do
+      {output, 0} ->
+        output
+        |> String.trim()
+        |> Float.parse()
+        |> case do
+          {duration, _} -> trunc(duration)
+          :error -> 0
+        end
+
+      _ ->
+        # ffprobe failed, return 0
+        0
+    end
+  end
+
+  # Extracts metadata from file path and filename.
+  #
+  # Attempts to intelligently parse common filename patterns:
+  # - "Artist - Title.mp3"
+  # - "01 - Artist - Title.mp3"
+  # - "01 Title.mp3"
+  # - "Title.mp3"
+  #
+  # Also attempts to extract album from parent directory name.
+  defp extract_metadata_from_path(file_path, file_name) do
+    # Try to get album from parent directory
+    parent_dir = file_path |> Path.dirname() |> Path.basename()
+    album = if parent_dir != "." and parent_dir != "/" and parent_dir != "", do: parent_dir, else: "Unknown"
+
+    # Parse filename for artist and title
+    {artist, title} = parse_filename(file_name)
+
+    %{
+      title: title || file_name,
+      artist: artist || "Unknown",
+      album: album
+    }
+  end
+
+  # Parses common filename patterns to extract artist and title.
+  #
+  # Patterns handled:
+  # - "Artist - Title" -> {Artist, Title}
+  # - "01 - Artist - Title" -> {Artist, Title}
+  # - "01 - Title" -> {nil, Title}
+  # - "01. Artist - Title" -> {Artist, Title}
+  # - "Title" -> {nil, Title}
+  defp parse_filename(filename) do
+    # Remove leading track numbers (e.g., "01 - ", "01. ", "1 - ")
+    cleaned = Regex.replace(~r/^\d+[\s\.\-]+/, filename, "")
+
+    case String.split(cleaned, " - ", parts: 2, trim: true) do
+      [artist, title] when byte_size(artist) > 0 and byte_size(title) > 0 ->
+        # "Artist - Title" or "01 - Artist - Title" (after track number removal)
+        {String.trim(artist), String.trim(title)}
+
+      [title] ->
+        # Just title, no artist
+        {nil, String.trim(title)}
+
+      _ ->
+        # Couldn't parse, use whole filename as title
+        {nil, filename}
+    end
   end
 
   @doc """

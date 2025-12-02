@@ -1,0 +1,665 @@
+module media-stream-history-actions {
+  yang-version 1.1;
+  namespace "urn:media-stream:actions:history";
+  prefix "history-act";
+
+  import ietf-yang-types {
+    prefix yang;
+  }
+
+  import media-stream-audio-file {
+    prefix audio;
+  }
+
+  import media-stream-listening-history {
+    prefix history;
+  }
+
+  organization "MediaStream";
+  description
+    "YANG RPC model for listening history operations.
+
+     Defines actions for tracking, querying, and analyzing
+     listening history data.
+
+     Implemented in: MediaStreamWeb.HistoryLive
+     Context functions: MediaStream.Media";
+
+  revision 2025-12-02 {
+    description "Initial version";
+  }
+
+  // Common types
+
+  typedef result-status {
+    type enumeration {
+      enum success;
+      enum error;
+    }
+  }
+
+  grouping common-output {
+    leaf status {
+      type result-status;
+      mandatory true;
+    }
+
+    leaf message {
+      type string;
+    }
+  }
+
+  // RPC: List History
+
+  rpc list-history {
+    description
+      "Retrieve listening history records.
+
+       Behavior:
+       - SELECT from listening_history
+       - Orders by started_at DESC (most recent first)
+       - Preloads audio_file association
+       - Optional device filtering
+
+       Triggers:
+       - Page load (HistoryLive mount)
+       - Toggle device filter
+       - Refresh button
+
+       Side effects:
+       - Database: SELECT with JOIN to audio_files
+       - No state changes";
+
+    input {
+      leaf device-id {
+        type string;
+        description
+          "Optional: filter to specific device.
+           Omit to see all devices' history.";
+      }
+
+      leaf limit {
+        type uint32;
+        default 100;
+        description "Maximum records to return";
+      }
+
+      leaf offset {
+        type uint32;
+        default 0;
+        description "Pagination offset";
+      }
+
+      leaf sort-order {
+        type enumeration {
+          enum most-recent;
+          enum oldest-first;
+          enum longest-duration;
+        }
+        default most-recent;
+      }
+    }
+
+    output {
+      uses common-output;
+
+      list history-records {
+        description "Listening history records";
+
+        leaf id {
+          type int64;
+        }
+
+        leaf audio-file-id {
+          type int64;
+        }
+
+        leaf device-id {
+          type string;
+        }
+
+        leaf started-at {
+          type yang:date-and-time;
+        }
+
+        leaf completed-at {
+          type yang:date-and-time;
+          description "NULL if not completed";
+        }
+
+        leaf duration-listened-seconds {
+          type int32;
+          units "seconds";
+        }
+
+        container audio-file {
+          description "Associated audio file details";
+
+          leaf id {
+            type int64;
+          }
+
+          leaf title {
+            type string;
+          }
+
+          leaf artist {
+            type string;
+          }
+
+          leaf album {
+            type string;
+          }
+
+          leaf duration-seconds {
+            type int32;
+            units "seconds";
+          }
+        }
+      }
+
+      leaf total-count {
+        type uint32;
+        description "Total matching records";
+      }
+    }
+  }
+
+  // RPC: Search History
+
+  rpc search-history {
+    description
+      "Search listening history by date range and text query.
+
+       Behavior:
+       - Filters by date range (started_at between start and end)
+       - Optional text search on audio file metadata
+       - Orders by started_at DESC
+       - Preloads audio_file association
+
+       Triggers:
+       - User enters date range and/or search query
+       - Form submission
+
+       Side effects:
+       - Database: SELECT with JOIN and WHERE clauses
+       - No state changes";
+
+    input {
+      leaf start-date {
+        type yang:date-and-time;
+        mandatory true;
+        description "Include records where started_at >= start_date";
+      }
+
+      leaf end-date {
+        type yang:date-and-time;
+        mandatory true;
+        description "Include records where started_at <= end_date";
+      }
+
+      leaf query {
+        type string;
+        description
+          "Optional text search query.
+           Searches audio file: title, artist, album.
+           Case-insensitive substring match.";
+      }
+
+      leaf device-id {
+        type string;
+        description "Optional: filter to specific device";
+      }
+
+      leaf limit {
+        type uint32;
+        default 100;
+      }
+
+      leaf offset {
+        type uint32;
+        default 0;
+      }
+    }
+
+    output {
+      uses common-output;
+
+      list history-records {
+        description "Matching history records";
+
+        leaf id {
+          type int64;
+        }
+
+        leaf audio-file-id {
+          type int64;
+        }
+
+        leaf device-id {
+          type string;
+        }
+
+        leaf started-at {
+          type yang:date-and-time;
+        }
+
+        leaf completed-at {
+          type yang:date-and-time;
+        }
+
+        leaf duration-listened-seconds {
+          type int32;
+          units "seconds";
+        }
+
+        container audio-file {
+          leaf id {
+            type int64;
+          }
+
+          leaf title {
+            type string;
+          }
+
+          leaf artist {
+            type string;
+          }
+
+          leaf album {
+            type string;
+          }
+        }
+      }
+
+      leaf total-matches {
+        type uint32;
+      }
+    }
+  }
+
+  // RPC: Create History Entry
+
+  rpc create-history-entry {
+    description
+      "Create new listening history record.
+
+       Behavior:
+       - INSERT INTO listening_history
+       - Records playback start event
+       - Sets started_at to current timestamp
+       - completed_at and duration initially NULL/0
+
+       Triggers:
+       - When user starts playing a track (play action)
+       - Automatic on playback start
+
+       Side effects:
+       - Database: INSERT INTO listening_history";
+
+    input {
+      leaf audio-file-id {
+        type int64;
+        mandatory true;
+        description "ID of audio file being played";
+      }
+
+      leaf device-id {
+        type string;
+        mandatory true;
+        description "Device initiating playback";
+      }
+
+      leaf started-at {
+        type yang:date-and-time;
+        description
+          "Optional: playback start timestamp.
+           Defaults to current time if omitted.";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      leaf history-id {
+        type int64;
+        description "ID of created history record";
+      }
+    }
+  }
+
+  // RPC: Update History Entry
+
+  rpc update-history-entry {
+    description
+      "Update listening history record.
+
+       Behavior:
+       - UPDATE listening_history
+       - Typically sets completed_at and duration_listened_seconds
+       - Called when track completes or user stops
+
+       Triggers:
+       - Track playback completes (audio_ended)
+       - User navigates away during playback
+
+       Side effects:
+       - Database: UPDATE listening_history";
+
+    input {
+      leaf history-id {
+        type int64;
+        mandatory true;
+        description "ID of history record to update";
+      }
+
+      leaf completed-at {
+        type yang:date-and-time;
+        description "Completion timestamp";
+      }
+
+      leaf duration-listened-seconds {
+        type int32;
+        units "seconds";
+        description "Total time listened";
+      }
+    }
+
+    output {
+      uses common-output;
+    }
+  }
+
+  // RPC: Filter by Date Range
+
+  rpc filter-by-date {
+    description
+      "Filter history to specific date range.
+
+       Behavior:
+       - Similar to search-history but without text query
+       - Simple date range filter
+       - Used by HistoryLive date picker
+
+       Triggers:
+       - User selects date range in UI
+       - Date picker change event
+
+       Side effects:
+       - Database: SELECT with date WHERE clause
+       - UI: Updates history list";
+
+    input {
+      leaf start-date {
+        type yang:date-and-time;
+        mandatory true;
+      }
+
+      leaf end-date {
+        type yang:date-and-time;
+        mandatory true;
+      }
+
+      leaf device-id {
+        type string;
+        description "Optional: device filter";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      list history-records {
+        leaf id {
+          type int64;
+        }
+
+        leaf audio-file-id {
+          type int64;
+        }
+
+        leaf device-id {
+          type string;
+        }
+
+        leaf started-at {
+          type yang:date-and-time;
+        }
+
+        leaf completed-at {
+          type yang:date-and-time;
+        }
+
+        leaf duration-listened-seconds {
+          type int32;
+          units "seconds";
+        }
+
+        container audio-file {
+          leaf title {
+            type string;
+          }
+
+          leaf artist {
+            type string;
+          }
+
+          leaf album {
+            type string;
+          }
+        }
+      }
+
+      leaf total-count {
+        type uint32;
+      }
+    }
+  }
+
+  // RPC: Toggle Device Filter
+
+  rpc toggle-device-filter {
+    description
+      "Toggle between current device and all devices.
+
+       Behavior:
+       - UI state change (show_all_devices boolean)
+       - Triggers list-history with or without device_id filter
+
+       Triggers:
+       - User clicks 'Show All Devices' / 'Current Device Only' toggle
+
+       Side effects:
+       - UI: Updates filter state and re-queries history";
+
+    input {
+      leaf device-id {
+        type string;
+        mandatory true;
+        description "Current device ID";
+      }
+
+      leaf show-all {
+        type boolean;
+        mandatory true;
+        description "true = all devices, false = current device only";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      leaf active-filter {
+        type enumeration {
+          enum all-devices;
+          enum current-device;
+        }
+      }
+    }
+  }
+
+  // RPC: Get History Statistics
+
+  rpc get-statistics {
+    description
+      "Get aggregated statistics from listening history.
+
+       Behavior:
+       - Aggregation queries (COUNT, SUM, AVG)
+       - Can be scoped to device and/or date range
+       - Used for analytics dashboard (future feature)
+
+       Side effects:
+       - Database: Aggregate SELECT queries
+       - No state changes";
+
+    input {
+      leaf device-id {
+        type string;
+        description "Optional: scope to device";
+      }
+
+      leaf start-date {
+        type yang:date-and-time;
+        description "Optional: date range start";
+      }
+
+      leaf end-date {
+        type yang:date-and-time;
+        description "Optional: date range end";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      container statistics {
+        leaf total-plays {
+          type uint64;
+          description "Total listening sessions";
+        }
+
+        leaf total-time-listened {
+          type uint64;
+          units "seconds";
+          description "Sum of duration_listened_seconds";
+        }
+
+        leaf unique-files-played {
+          type uint32;
+          description "Distinct count of audio_file_id";
+        }
+
+        leaf average-session-duration {
+          type decimal64 {
+            fraction-digits 2;
+          }
+          units "seconds";
+          description "Average duration per session";
+        }
+
+        leaf completion-rate {
+          type decimal64 {
+            fraction-digits 2;
+          }
+          units "percent";
+          description
+            "Percentage of sessions with completed_at set.
+             Indicates how often tracks are played to completion.";
+        }
+
+        list top-played-files {
+          description "Most frequently played files";
+
+          leaf audio-file-id {
+            type int64;
+          }
+
+          leaf play-count {
+            type uint32;
+          }
+
+          container audio-file {
+            leaf title {
+              type string;
+            }
+
+            leaf artist {
+              type string;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Error conditions
+
+  typedef error-code {
+    type enumeration {
+      enum invalid-date-range {
+        description "End date is before start date";
+      }
+      enum history-not-found {
+        description "History record with given ID does not exist";
+      }
+      enum audio-file-not-found {
+        description "Referenced audio file does not exist";
+      }
+      enum invalid-device-id {
+        description "Device ID format is invalid";
+      }
+      enum database-error {
+        description "Database operation failed";
+      }
+    }
+  }
+
+  grouping error-response {
+    leaf error-code {
+      type error-code;
+      mandatory true;
+    }
+
+    leaf error-message {
+      type string;
+    }
+
+    leaf details {
+      type string;
+    }
+  }
+
+  // Query optimization hints
+
+  grouping query-hints {
+    description
+      "Hints for optimizing history queries.
+       Documented for future reference.";
+
+    container indexes-used {
+      leaf started-at-index {
+        type boolean;
+        description "Date range queries use started_at index";
+      }
+
+      leaf device-id-index {
+        type boolean;
+        description "Device filtering uses device_id index";
+      }
+
+      leaf audio-file-id-index {
+        type boolean;
+        description "File-specific queries use audio_file_id index";
+      }
+    }
+
+    leaf preload-audio-file {
+      type boolean;
+      default true;
+      description
+        "Whether to preload audio_file association.
+         Recommended for displaying titles/artists.";
+    }
+  }
+}

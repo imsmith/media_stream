@@ -42,6 +42,8 @@ defmodule MediaStreamWeb.PlayerLive do
      |> assign(:playing, false)
      |> assign(:search_query, "")
      |> assign(:upload_error, nil)
+     |> assign(:scan_status, nil)
+     |> assign(:directory_path, "")
      |> allow_upload(:playlist, accept: [".m3u", ".m3u8"], max_entries: 1)}
   end
 
@@ -64,10 +66,27 @@ defmodule MediaStreamWeb.PlayerLive do
     file = Media.get_audio_file!(String.to_integer(id))
     queue = socket.assigns.queue ++ [file]
 
-    # Update playback state
-    update_state(socket, %{queue_json: encode_queue(queue)})
+    # If queue was empty and no current file, auto-play the first track
+    {current_file, updated_queue, playing} =
+      if socket.assigns.queue == [] && socket.assigns.current_file == nil do
+        # Start playing the first track
+        update_state(socket, %{
+          current_file_id: file.id,
+          position_seconds: 0.0,
+          queue_json: encode_queue([])
+        })
+        {file, [], true}
+      else
+        # Just add to queue
+        update_state(socket, %{queue_json: encode_queue(queue)})
+        {socket.assigns.current_file, queue, socket.assigns.playing}
+      end
 
-    {:noreply, assign(socket, :queue, queue)}
+    {:noreply,
+     socket
+     |> assign(:queue, updated_queue)
+     |> assign(:current_file, current_file)
+     |> assign(:playing, playing)}
   end
 
   def handle_event("remove_from_queue", %{"id" => id}, socket) do
@@ -205,6 +224,42 @@ defmodule MediaStreamWeb.PlayerLive do
     {:noreply, cancel_upload(socket, :playlist, ref)}
   end
 
+  def handle_event("scan_directory", %{"directory_path" => path}, socket) do
+    path = String.trim(path)
+
+    if path == "" do
+      {:noreply,
+       socket
+       |> assign(:scan_status, "Please enter a directory path")
+       |> assign(:directory_path, path)}
+    else
+      case Media.scan_directory(path) do
+        {:ok, %{scanned: scanned, added: added, skipped: skipped}} ->
+          # Refresh audio files list
+          audio_files = Media.list_audio_files()
+
+          {:noreply,
+           socket
+           |> assign(:audio_files, audio_files)
+           |> assign(:filtered_files, audio_files)
+           |> assign(:scan_status, "Scanned #{scanned} files: #{added} added, #{skipped} skipped")
+           |> assign(:directory_path, "")
+           |> put_flash(:info, "Scanned #{scanned} files: #{added} added, #{skipped} skipped")}
+
+        {:error, reason} ->
+          {:noreply,
+           socket
+           |> assign(:scan_status, "Error: #{inspect(reason)}")
+           |> assign(:directory_path, path)
+           |> put_flash(:error, "Failed to scan directory")}
+      end
+    end
+  end
+
+  def handle_event("update_directory_path", %{"directory_path" => path}, socket) do
+    {:noreply, assign(socket, :directory_path, path)}
+  end
+
   @impl true
   def handle_info({:playback_state_updated, state}, socket) do
     # Sync from other device
@@ -217,6 +272,30 @@ defmodule MediaStreamWeb.PlayerLive do
      |> assign(:current_file, current)
      |> assign(:queue, queue_files)
      |> assign(:position, state.position_seconds || 0.0)}
+  end
+
+  def handle_info(:play_next, socket) do
+    # Auto-advance to next track in queue
+    case socket.assigns.queue do
+      [] ->
+        # No more tracks, stop playing
+        {:noreply, assign(socket, :playing, false)}
+
+      [next_file | rest] ->
+        # Play next track
+        update_state(socket, %{
+          current_file_id: next_file.id,
+          position_seconds: 0.0,
+          queue_json: encode_queue(rest)
+        })
+
+        {:noreply,
+         socket
+         |> assign(:current_file, next_file)
+         |> assign(:queue, rest)
+         |> assign(:position, 0.0)
+         |> assign(:playing, true)}
+    end
   end
 
   defp update_state(socket, attrs) do

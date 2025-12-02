@@ -1,0 +1,244 @@
+module media-stream-audio-file {
+  yang-version 1.1;
+  namespace "urn:media-stream:models:audio-file";
+  prefix "audio";
+
+  import ietf-yang-types {
+    prefix yang;
+  }
+
+  organization "MediaStream";
+  description
+    "YANG data model for AudioFile schema.
+
+     Represents audio files in the media library with metadata
+     including path, title, artist, album, and file characteristics.
+
+     Corresponds to Ecto schema: MediaStream.Media.AudioFile
+     Database table: audio_files";
+
+  revision 2025-12-02 {
+    description "Initial version";
+  }
+
+  // Extension for Ecto-specific database indexing
+  extension ecto-index {
+    description "Marks field as indexed in database";
+  }
+
+  // Extension for Ecto unique constraint
+  extension ecto-unique {
+    description "Marks field as having unique constraint";
+  }
+
+  typedef audio-format {
+    type enumeration {
+      enum mp3 {
+        description "MPEG Audio Layer 3";
+      }
+      enum m4a {
+        description "MPEG-4 Audio";
+      }
+      enum flac {
+        description "Free Lossless Audio Codec";
+      }
+      enum ogg {
+        description "Ogg Vorbis";
+      }
+      enum wav {
+        description "Waveform Audio File Format";
+      }
+      enum aac {
+        description "Advanced Audio Coding";
+      }
+    }
+    description "Supported audio file formats";
+  }
+
+  container audio-file {
+    description
+      "Audio file record in the media library.
+
+       Primary identifier for all audio content in the system.
+       Used by playback state and listening history.";
+
+    leaf id {
+      type int64;
+      mandatory true;
+      description
+        "Auto-incremented primary key.
+         Database type: INTEGER PRIMARY KEY";
+    }
+
+    leaf path {
+      type string;
+      mandatory true;
+      audio:ecto-unique;
+      description
+        "Full filesystem path to the audio file.
+         Must be unique across all audio files.
+         Database type: STRING NOT NULL UNIQUE
+         Ecto constraint: unique_constraint(:path)";
+    }
+
+    leaf title {
+      type string;
+      audio:ecto-index;
+      description
+        "Song or track title.
+         Extracted from filename if metadata not available.
+         Database type: STRING
+         Indexed for search performance";
+    }
+
+    leaf artist {
+      type string;
+      audio:ecto-index;
+      description
+        "Artist or performer name.
+         Defaults to 'Unknown' if not available.
+         Database type: STRING
+         Indexed for search performance";
+    }
+
+    leaf album {
+      type string;
+      audio:ecto-index;
+      description
+        "Album name.
+         Defaults to 'Unknown' if not available.
+         Database type: STRING
+         Indexed for search performance";
+    }
+
+    leaf duration-seconds {
+      type int32;
+      units "seconds";
+      description
+        "Duration of audio file in seconds.
+         May be 0 if duration cannot be determined.
+         Database type: INTEGER";
+    }
+
+    leaf file-type {
+      type string;
+      description
+        "File extension including leading dot (e.g., '.mp3', '.flac').
+         Used for Content-Type header in HTTP streaming.
+         Database type: STRING";
+    }
+
+    leaf file-size {
+      type int64;
+      units "bytes";
+      description
+        "Size of audio file in bytes.
+         Used for HTTP Content-Length and range request handling.
+         Database type: INTEGER (64-bit)";
+    }
+
+    leaf inserted-at {
+      type yang:date-and-time;
+      mandatory true;
+      description
+        "Timestamp when record was created.
+         Automatically set by Ecto timestamps().
+         Database type: DATETIME (UTC)";
+    }
+
+    leaf updated-at {
+      type yang:date-and-time;
+      mandatory true;
+      description
+        "Timestamp when record was last updated.
+         Automatically updated by Ecto timestamps().
+         Database type: DATETIME (UTC)";
+    }
+  }
+
+  // Relationships
+
+  grouping audio-file-reference {
+    description
+      "Reference to an audio file for use in foreign key relationships.";
+
+    leaf audio-file-id {
+      type leafref {
+        path "/audio-file/id";
+      }
+      description
+        "Foreign key reference to audio_files table.
+         Used by: playback_states.current_file_id
+                  listening_history.audio_file_id";
+    }
+  }
+
+  // Search and query operations (documented for reference)
+
+  typedef search-field {
+    type enumeration {
+      enum title {
+        description "Search in title field";
+      }
+      enum artist {
+        description "Search in artist field";
+      }
+      enum album {
+        description "Search in album field";
+      }
+      enum all {
+        description "Search across title, artist, and album";
+      }
+    }
+    description "Fields available for text search";
+  }
+
+  grouping search-parameters {
+    description "Parameters for searching audio files";
+
+    leaf query {
+      type string;
+      description
+        "Search query string.
+         Uses case-insensitive substring matching (ILIKE in SQL).
+         Searches across title, artist, and album fields.";
+    }
+
+    leaf-list fields {
+      type search-field;
+      description
+        "Optional: limit search to specific fields.
+         Default: searches all fields.";
+    }
+  }
+
+  // Validation constraints
+
+  grouping validation-rules {
+    description "Validation rules for audio file records";
+
+    container constraints {
+      description "Database and business logic constraints";
+
+      leaf path-required {
+        type boolean;
+        default true;
+        description "Path field is mandatory (validate_required in Ecto)";
+      }
+
+      leaf path-unique {
+        type boolean;
+        default true;
+        description "Path must be unique across all records";
+      }
+
+      leaf file-must-exist {
+        type boolean;
+        default false;
+        description
+          "Whether to validate file existence on filesystem.
+           Not enforced in schema but checked during streaming.";
+      }
+    }
+  }
+}

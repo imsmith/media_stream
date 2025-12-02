@@ -1,0 +1,63 @@
+graph TB
+    subgraph "Client Browser"
+        UI[LiveView UI]
+        Audio[HTML5 Audio Element]
+        Hooks[JS Hooks]
+
+        UI <--> Hooks
+        Hooks <--> Audio
+    end
+
+    subgraph "Phoenix Application"
+        Router[Router]
+
+        subgraph "Web Layer"
+            PlayerLive[PlayerLive]
+            HistoryLive[HistoryLive]
+            AudioController[AudioController]
+        end
+
+        subgraph "Business Logic"
+            MediaContext[Media Context]
+        end
+
+        subgraph "Infrastructure"
+            PubSub[Phoenix PubSub]
+            Repo[Ecto Repo]
+        end
+
+        Router --> PlayerLive
+        Router --> HistoryLive
+        Router --> AudioController
+
+        PlayerLive --> MediaContext
+        HistoryLive --> MediaContext
+        AudioController --> MediaContext
+
+        MediaContext --> Repo
+        MediaContext --> PubSub
+
+        PubSub -.->|broadcasts| PlayerLive
+    end
+
+    subgraph "Data Storage"
+        DB[(SQLite Database)]
+        FS[/Filesystem Audio Files/]
+    end
+
+    Repo --> DB
+    AudioController --> FS
+    MediaContext --> FS
+
+    UI <-->|WebSocket LiveView| PlayerLive
+    UI <-->|WebSocket LiveView| HistoryLive
+    Audio <-->|HTTP Range Requests| AudioController
+
+    style UI fill:#e1f5ff
+    style Audio fill:#e1f5ff
+    style PlayerLive fill:#fff4e1
+    style HistoryLive fill:#fff4e1
+    style MediaContext fill:#e8f5e9
+    style PubSub fill:#f3e5f5
+    style DB fill:#ffebee
+    style FS fill:#ffebee

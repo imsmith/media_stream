@@ -1,0 +1,672 @@
+module media-stream-library-actions {
+  yang-version 1.1;
+  namespace "urn:media-stream:actions:library";
+  prefix "library-act";
+
+  import ietf-yang-types {
+    prefix yang;
+  }
+
+  import media-stream-audio-file {
+    prefix audio;
+  }
+
+  organization "MediaStream";
+  description
+    "YANG RPC model for library management operations.
+
+     Defines actions for managing the audio library including
+     directory scanning, searching, and playlist loading.
+
+     Implemented in: MediaStreamWeb.PlayerLive
+     Context functions: MediaStream.Media";
+
+  revision 2025-12-02 {
+    description "Initial version";
+  }
+
+  // Common types
+
+  typedef result-status {
+    type enumeration {
+      enum success;
+      enum partial-success;
+      enum error;
+    }
+  }
+
+  grouping common-output {
+    leaf status {
+      type result-status;
+      mandatory true;
+    }
+
+    leaf message {
+      type string;
+      description "Human-readable result message";
+    }
+  }
+
+  // RPC: Scan Directory
+
+  rpc scan-directory {
+    description
+      "Recursively scan filesystem directory for audio files.
+
+       Behavior:
+       - Walks directory tree using Path.wildcard('**/*')
+       - Filters for supported audio formats
+       - Creates AudioFile records for new files (skips duplicates by path)
+       - Extracts basic metadata (filename, size, extension)
+
+       Supported formats:
+       - .mp3, .m4a, .flac, .ogg, .wav, .aac
+
+       Triggers:
+       - User enters directory path and clicks 'Scan' button
+
+       Side effects:
+       - Database: INSERT INTO audio_files (multiple rows)
+       - Flash message: Shows scan results";
+
+    input {
+      leaf directory-path {
+        type string;
+        mandatory true;
+        description
+          "Absolute path to directory to scan.
+           Must be readable by application process.
+           Example: '/home/user/Music'";
+      }
+
+      leaf recursive {
+        type boolean;
+        default true;
+        description
+          "Whether to scan subdirectories recursively.
+           Default: true";
+      }
+
+      leaf follow-symlinks {
+        type boolean;
+        default false;
+        description
+          "Whether to follow symbolic links.
+           Default: false for security.";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      leaf files-scanned {
+        type uint32;
+        description "Total audio files found in directory";
+      }
+
+      leaf files-added {
+        type uint32;
+        description "New files added to database";
+      }
+
+      leaf files-skipped {
+        type uint32;
+        description "Files skipped (already in database)";
+      }
+
+      leaf-list errors {
+        type string;
+        description "List of files that couldn't be processed";
+      }
+    }
+  }
+
+  // RPC: Search Audio Files
+
+  rpc search {
+    description
+      "Search audio library by metadata.
+
+       Behavior:
+       - Case-insensitive substring match (ILIKE in SQL)
+       - Searches across: title, artist, album
+       - Empty query returns all files
+       - Returns sorted results (could specify sort order)
+
+       Triggers:
+       - User types in search box (real-time)
+       - Search query updated on every keystroke
+
+       Side effects:
+       - Database: SELECT query on audio_files
+       - UI: Updates filtered_files list";
+
+    input {
+      leaf query {
+        type string;
+        mandatory true;
+        description
+          "Search query string.
+           Empty string returns all files.";
+      }
+
+      leaf-list search-fields {
+        type audio:search-field;
+        description
+          "Optional: limit search to specific fields.
+           Default: searches all fields (title, artist, album).";
+      }
+
+      leaf max-results {
+        type uint32;
+        default 100;
+        description "Maximum number of results to return";
+      }
+
+      leaf sort-by {
+        type enumeration {
+          enum title;
+          enum artist;
+          enum album;
+          enum recently-added;
+          enum file-size;
+        }
+        default title;
+        description "Sort order for results";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      list audio-files {
+        description "Matching audio files";
+
+        leaf id {
+          type int64;
+        }
+
+        leaf path {
+          type string;
+        }
+
+        leaf title {
+          type string;
+        }
+
+        leaf artist {
+          type string;
+        }
+
+        leaf album {
+          type string;
+        }
+
+        leaf duration-seconds {
+          type int32;
+          units "seconds";
+        }
+
+        leaf file-type {
+          type string;
+        }
+
+        leaf file-size {
+          type int64;
+          units "bytes";
+        }
+      }
+
+      leaf total-matches {
+        type uint32;
+        description "Total matching files (may be > returned count)";
+      }
+    }
+  }
+
+  // RPC: Load Playlist
+
+  rpc load-playlist {
+    description
+      "Load M3U/M3U8 playlist file and populate queue.
+
+       Behavior:
+       - Parses playlist file (line-by-line)
+       - Filters out comments (# prefix)
+       - Resolves relative paths to absolute
+       - Matches file paths to audio_files in database
+       - Replaces current queue with playlist tracks
+       - Only includes files that exist in database
+
+       Playlist format support:
+       - .m3u (standard format)
+       - .m3u8 (UTF-8 encoded)
+
+       Triggers:
+       - User uploads playlist file via file input
+
+       Side effects:
+       - Database: UPDATE playback_states SET queue_json
+       - Flash message: Shows track count loaded";
+
+    input {
+      leaf playlist-path {
+        type string;
+        mandatory true;
+        description
+          "Path to uploaded playlist file.
+           Temporary file path from Phoenix.LiveView.Upload.";
+      }
+
+      leaf replace-queue {
+        type boolean;
+        default true;
+        description
+          "Whether to replace queue or append to it.
+           Default: true (replace)";
+      }
+
+      leaf device-id {
+        type string;
+        mandatory true;
+        description "Device ID to update queue for";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      leaf tracks-in-playlist {
+        type uint32;
+        description "Total tracks listed in playlist";
+      }
+
+      leaf tracks-loaded {
+        type uint32;
+        description "Tracks found in database and added to queue";
+      }
+
+      leaf tracks-not-found {
+        type uint32;
+        description "Tracks in playlist but not in database";
+      }
+
+      leaf-list missing-paths {
+        type string;
+        description "Paths from playlist not found in database";
+      }
+    }
+  }
+
+  // RPC: Parse Playlist
+
+  rpc parse-playlist {
+    description
+      "Parse playlist file and return file paths (without loading).
+
+       Behavior:
+       - Reads playlist file
+       - Parses line-by-line
+       - Filters comments and headers
+       - Resolves relative paths
+       - Returns list of file paths
+
+       Used by: load-playlist RPC
+       Can be used independently for preview.
+
+       Side effects:
+       - None (read-only operation)";
+
+    input {
+      leaf playlist-path {
+        type string;
+        mandatory true;
+        description "Path to playlist file";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      leaf-list file-paths {
+        type string;
+        ordered-by user;
+        description "List of audio file paths from playlist in order";
+      }
+
+      leaf format-detected {
+        type enumeration {
+          enum m3u;
+          enum m3u8;
+          enum extended-m3u;
+        }
+        description "Detected playlist format";
+      }
+    }
+  }
+
+  // RPC: List Audio Files
+
+  rpc list-audio-files {
+    description
+      "Retrieve all audio files in library.
+
+       Behavior:
+       - SELECT * FROM audio_files
+       - Returns all columns
+       - Optional sorting and filtering
+
+       Triggers:
+       - Page load (PlayerLive mount)
+       - After directory scan
+
+       Side effects:
+       - Database: SELECT query
+       - No state changes";
+
+    input {
+      leaf sort-by {
+        type enumeration {
+          enum title;
+          enum artist;
+          enum album;
+          enum recently-added;
+          enum file-size;
+        }
+        default title;
+      }
+
+      leaf sort-order {
+        type enumeration {
+          enum asc;
+          enum desc;
+        }
+        default asc;
+      }
+
+      leaf limit {
+        type uint32;
+        description "Optional: limit number of results";
+      }
+
+      leaf offset {
+        type uint32;
+        default 0;
+        description "Optional: pagination offset";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      list audio-files {
+        description "All audio files in library";
+
+        leaf id {
+          type int64;
+        }
+
+        leaf path {
+          type string;
+        }
+
+        leaf title {
+          type string;
+        }
+
+        leaf artist {
+          type string;
+        }
+
+        leaf album {
+          type string;
+        }
+
+        leaf duration-seconds {
+          type int32;
+          units "seconds";
+        }
+
+        leaf file-type {
+          type string;
+        }
+
+        leaf file-size {
+          type int64;
+          units "bytes";
+        }
+
+        leaf inserted-at {
+          type yang:date-and-time;
+        }
+      }
+
+      leaf total-count {
+        type uint32;
+        description "Total files in library";
+      }
+    }
+  }
+
+  // RPC: Get Audio File
+
+  rpc get-audio-file {
+    description
+      "Retrieve single audio file by ID.
+
+       Behavior:
+       - SELECT FROM audio_files WHERE id = ?
+       - Raises error if not found
+
+       Triggers:
+       - Internal use by other operations
+       - Play action needs file details
+
+       Side effects:
+       - Database: SELECT query
+       - Raises Ecto.NoResultsError if not found";
+
+    input {
+      leaf id {
+        type int64;
+        mandatory true;
+        description "Audio file ID";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      container audio-file {
+        description "Audio file details";
+
+        leaf id {
+          type int64;
+        }
+
+        leaf path {
+          type string;
+        }
+
+        leaf title {
+          type string;
+        }
+
+        leaf artist {
+          type string;
+        }
+
+        leaf album {
+          type string;
+        }
+
+        leaf duration-seconds {
+          type int32;
+          units "seconds";
+        }
+
+        leaf file-type {
+          type string;
+        }
+
+        leaf file-size {
+          type int64;
+          units "bytes";
+        }
+
+        leaf file-exists {
+          type boolean;
+          description "Whether file exists on filesystem (checked on demand)";
+        }
+      }
+    }
+  }
+
+  // RPC: Create Audio File
+
+  rpc create-audio-file {
+    description
+      "Manually create audio file record.
+
+       Behavior:
+       - INSERT INTO audio_files
+       - Validates path uniqueness
+       - Validates required fields
+
+       Triggers:
+       - Called internally by scan-directory
+       - Could be used for manual library management
+
+       Side effects:
+       - Database: INSERT INTO audio_files";
+
+    input {
+      leaf path {
+        type string;
+        mandatory true;
+        description "Filesystem path (must be unique)";
+      }
+
+      leaf title {
+        type string;
+        description "Optional: song title (defaults to filename)";
+      }
+
+      leaf artist {
+        type string;
+        description "Optional: artist (defaults to 'Unknown')";
+      }
+
+      leaf album {
+        type string;
+        description "Optional: album (defaults to 'Unknown')";
+      }
+
+      leaf duration-seconds {
+        type int32;
+        units "seconds";
+        description "Optional: duration (defaults to 0)";
+      }
+
+      leaf file-type {
+        type string;
+        description "Optional: file extension (extracted from path if omitted)";
+      }
+
+      leaf file-size {
+        type int64;
+        units "bytes";
+        description "Optional: file size (read from filesystem if omitted)";
+      }
+    }
+
+    output {
+      uses common-output;
+
+      leaf audio-file-id {
+        type int64;
+        description "ID of created audio file";
+      }
+    }
+  }
+
+  // Error conditions
+
+  typedef error-code {
+    type enumeration {
+      enum directory-not-found {
+        description "Directory path does not exist";
+      }
+      enum permission-denied {
+        description "No read permission for directory";
+      }
+      enum invalid-path {
+        description "Path is invalid or malformed";
+      }
+      enum playlist-parse-error {
+        description "Failed to parse playlist file";
+      }
+      enum playlist-empty {
+        description "Playlist contains no valid tracks";
+      }
+      enum no-matching-files {
+        description "No playlist tracks found in database";
+      }
+      enum duplicate-path {
+        description "Audio file with this path already exists";
+      }
+      enum invalid-format {
+        description "Audio file format not supported";
+      }
+      enum database-error {
+        description "Database operation failed";
+      }
+    }
+  }
+
+  grouping error-response {
+    leaf error-code {
+      type error-code;
+      mandatory true;
+    }
+
+    leaf error-message {
+      type string;
+    }
+
+    leaf details {
+      type string;
+    }
+  }
+
+  // Configuration and settings
+
+  grouping scan-settings {
+    description "Configuration for directory scanning";
+
+    leaf-list supported-formats {
+      type string;
+      default ".mp3";
+      default ".m4a";
+      default ".flac";
+      default ".ogg";
+      default ".wav";
+      default ".aac";
+      description "File extensions to scan for";
+    }
+
+    leaf max-file-size {
+      type uint64;
+      units "bytes";
+      description
+        "Optional: skip files larger than this.
+         Used to avoid scanning very large files.";
+    }
+
+    leaf skip-hidden {
+      type boolean;
+      default true;
+      description "Skip files/directories starting with '.'";
+    }
+  }
+}

@@ -1,0 +1,37 @@
+erDiagram
+    AUDIO_FILES ||--o{ PLAYBACK_STATES : "current_file"
+    AUDIO_FILES ||--o{ LISTENING_HISTORY : "played"
+
+    AUDIO_FILES {
+        int64 id PK "Primary key"
+        string path UK "Unique file path"
+        string title "Song title (indexed)"
+        string artist "Artist name (indexed)"
+        string album "Album name (indexed)"
+        int32 duration_seconds "Duration in seconds"
+        string file_type "File extension (.mp3, etc)"
+        int64 file_size "Size in bytes"
+        datetime inserted_at "Created timestamp"
+        datetime updated_at "Updated timestamp"
+    }
+
+    PLAYBACK_STATES {
+        int64 id PK "Primary key"
+        string device_id UK "Unique device identifier"
+        int64 current_file_id FK "Currently playing file (NULL ok)"
+        float position_seconds "Playback position (default 0.0)"
+        text queue_json "JSON array of file IDs"
+        datetime inserted_at "Created timestamp"
+        datetime updated_at "Updated timestamp"
+    }
+
+    LISTENING_HISTORY {
+        int64 id PK "Primary key"
+        int64 audio_file_id FK "Audio file played"
+        string device_id "Device that played"
+        datetime started_at "Playback start time (indexed)"
+        datetime completed_at "Playback end time (NULL ok, indexed)"
+        int32 duration_listened_seconds "Time listened (default 0)"
+        datetime inserted_at "Created timestamp"
+        datetime updated_at "Updated timestamp"
+    }
