@@ -4,6 +4,7 @@ defmodule MediaStreamWeb.Router do
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
+    plug MediaStreamWeb.Plugs.DeviceId
     plug :fetch_live_flash
     plug :put_root_layout, html: {MediaStreamWeb.Layouts, :root}
     plug :protect_from_forgery

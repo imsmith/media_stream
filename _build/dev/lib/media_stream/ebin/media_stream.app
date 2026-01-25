@@ -28,6 +28,7 @@
           'Elixir.MediaStreamWeb.HistoryLive','Elixir.MediaStreamWeb.Layouts',
           'Elixir.MediaStreamWeb.PageController',
           'Elixir.MediaStreamWeb.PageHTML','Elixir.MediaStreamWeb.PlayerLive',
+          'Elixir.MediaStreamWeb.Plugs.DeviceId',
           'Elixir.MediaStreamWeb.Router','Elixir.MediaStreamWeb.Telemetry']},
      {registered,[]},
      {vsn,"0.1.0"},

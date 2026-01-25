@@ -2,17 +2,31 @@ defmodule MediaStreamWeb.AudioController do
   use MediaStreamWeb, :controller
   alias MediaStream.Media
 
+  @mime_types %{
+    ".mp3" => "audio/mpeg",
+    ".m4a" => "audio/mp4",
+    ".flac" => "audio/flac",
+    ".ogg" => "audio/ogg",
+    ".wav" => "audio/wav",
+    ".aac" => "audio/aac",
+    ".wma" => "audio/x-ms-wma",
+    ".opus" => "audio/opus"
+  }
+
   @doc """
   Streams an audio file with range request support for seeking.
   """
   def stream(conn, %{"id" => id}) do
     audio_file = Media.get_audio_file!(id)
 
-    unless File.exists?(audio_file.path) do
-      send_resp(conn, 404, "File not found")
+    if not File.exists?(audio_file.path) do
+      conn
+      |> send_resp(404, "File not found")
+      |> halt()
     else
       file_stat = File.stat!(audio_file.path)
       file_size = file_stat.size
+      content_type = get_mime_type(audio_file.path, audio_file.file_type)
 
       # Get range header if present
       range_header = get_req_header(conn, "range")
@@ -25,7 +39,7 @@ defmodule MediaStreamWeb.AudioController do
 
           # Send partial content with range
           conn
-          |> put_resp_header("content-type", audio_file.file_type || "audio/mpeg")
+          |> put_resp_header("content-type", content_type)
           |> put_resp_header("accept-ranges", "bytes")
           |> put_resp_header(
             "content-range",
@@ -37,11 +51,21 @@ defmodule MediaStreamWeb.AudioController do
         _ ->
           # No range header, send entire file
           conn
-          |> put_resp_header("content-type", audio_file.file_type || "audio/mpeg")
+          |> put_resp_header("content-type", content_type)
           |> put_resp_header("accept-ranges", "bytes")
           |> put_resp_header("content-length", "#{file_size}")
           |> send_file(200, audio_file.path)
       end
+    end
+  end
+
+  defp get_mime_type(path, stored_type) do
+    ext = Path.extname(path) |> String.downcase()
+    # Check if stored_type is already a valid MIME type
+    if stored_type && String.contains?(stored_type, "/") do
+      stored_type
+    else
+      Map.get(@mime_types, ext, "audio/mpeg")
     end
   end
 

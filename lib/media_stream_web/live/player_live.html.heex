@@ -180,9 +180,10 @@
             <audio
               id="audio-player"
               phx-hook=".AudioPlayer"
-              data-playing={@playing}
+              data-playing={to_string(@playing == true)}
+              data-is-active-player={to_string(@active_player_id == @device_id)}
               src={~p"/audio/#{@current_file.id}"}
-              preload="metadata"
+              preload="auto"
             >
             </audio>
             
@@ -204,7 +205,8 @@
               </div>
               <div
                 id="progress-bar"
-                phx-click="seek_to_position"
+                phx-hook=".ProgressBar"
+                data-duration={@current_file.duration_seconds}
                 class="h-3 bg-white border-2 border-black relative cursor-pointer"
               >
                 <div
@@ -252,10 +254,51 @@
             </div>
           <% end %>
           
-<!-- Device Info -->
-          <div class="mt-4 pt-4 border-t-2 border-gray-700 text-xs text-gray-400">
-            <div>DEVICE: {@device_id}</div>
-            <div>SYNC: ENABLED</div>
+<!-- Device Info & Controls -->
+          <div class="mt-4 pt-4 border-t-2 border-gray-700 text-xs">
+            <div class="flex justify-between items-center mb-2">
+              <span class="text-gray-400">THIS DEVICE: {@device_id}</span>
+              <%= if @active_player_id == @device_id do %>
+                <span class="bg-green-600 text-white px-2 py-1 font-bold">PLAYING HERE</span>
+              <% else %>
+                <button
+                  phx-click="claim_active_player"
+                  class="bg-gray-700 text-white px-2 py-1 font-bold hover:bg-gray-600"
+                >
+                  PLAY HERE
+                </button>
+              <% end %>
+            </div>
+            <%= if @active_player_id && @active_player_id != @device_id do %>
+              <div class="text-gray-400 mb-2">
+                AUDIO OUTPUT: {@active_player_id}
+              </div>
+            <% end %>
+            <div class="flex items-center gap-2">
+              <button
+                phx-click="toggle_remote_control"
+                class={[
+                  "px-2 py-1 font-bold border",
+                  if(@remote_control_mode,
+                    do: "bg-yellow-600 text-black border-yellow-400",
+                    else: "bg-gray-800 text-gray-400 border-gray-600 hover:bg-gray-700"
+                  )
+                ]}
+              >
+                <%= if @remote_control_mode do %>
+                  REMOTE CONTROL: ON
+                <% else %>
+                  REMOTE CONTROL: OFF
+                <% end %>
+              </button>
+              <span class="text-gray-500">
+                <%= if @remote_control_mode do %>
+                  (controls won't move audio here)
+                <% else %>
+                  (controls move audio here)
+                <% end %>
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -267,22 +310,37 @@
     export default {
       mounted() {
         const audio = this.el;
+        this.lastSrc = audio.src;
+        this.pendingPlay = false;
+        console.log('[AudioPlayer] mounted, src:', audio.src, 'data-playing:', audio.dataset.playing);
 
         // Handle play event
         audio.addEventListener('play', () => {
+          console.log('[AudioPlayer] play event fired');
           this.pushEvent('audio_playing', {});
         });
 
         // Handle pause event
         audio.addEventListener('pause', () => {
+          console.log('[AudioPlayer] pause event fired');
           this.pushEvent('audio_paused', {});
         });
 
-        // Handle time updates
+        // Handle errors
+        audio.addEventListener('error', (e) => {
+          console.error('[AudioPlayer] error:', audio.error?.message, audio.error?.code);
+        });
+
+        // Handle time updates - throttle to reduce server load
+        let lastUpdate = 0;
         audio.addEventListener('timeupdate', () => {
-          this.pushEvent('audio_time_update', {
-            position: audio.currentTime
-          });
+          const now = Date.now();
+          if (now - lastUpdate > 1000) {
+            this.pushEvent('audio_time_update', {
+              position: audio.currentTime
+            });
+            lastUpdate = now;
+          }
         });
 
         // Handle track ended
@@ -292,21 +350,101 @@
 
         // Handle loaded metadata (for duration)
         audio.addEventListener('loadedmetadata', () => {
+          console.log('[AudioPlayer] metadata loaded, duration:', audio.duration);
           this.pushEvent('audio_metadata_loaded', {
             duration: audio.duration
           });
         });
+
+        // Handle canplay - this is when we can actually start playing
+        audio.addEventListener('canplay', () => {
+          console.log('[AudioPlayer] canplay fired, pendingPlay:', this.pendingPlay);
+          if (this.pendingPlay) {
+            this.pendingPlay = false;
+            this.doPlay();
+          }
+        });
+
+        // Check if we should auto-play on mount
+        this.maybePlay();
       },
 
       updated() {
         const audio = this.el;
-        const shouldPlay = this.el.dataset.playing === 'true';
+        const isActivePlayer = audio.dataset.isActivePlayer === 'true';
+        console.log('[AudioPlayer] updated, src:', audio.src, 'isActivePlayer:', isActivePlayer, 'data-playing:', audio.dataset.playing);
 
-        if (shouldPlay && audio.paused) {
-          audio.play().catch(err => console.log('Play failed:', err));
-        } else if (!shouldPlay && !audio.paused) {
+        // Check if src changed (new track)
+        if (audio.src !== this.lastSrc) {
+          console.log('[AudioPlayer] src changed, loading new track');
+          this.lastSrc = audio.src;
+          // Only set pendingPlay if we're the active player
+          this.pendingPlay = audio.dataset.playing === 'true' && isActivePlayer;
+          audio.load();
+        } else {
+          this.maybePlay();
+        }
+      },
+
+      maybePlay() {
+        const audio = this.el;
+        const shouldPlay = audio.dataset.playing === 'true';
+        const isActivePlayer = audio.dataset.isActivePlayer === 'true';
+        console.log('[AudioPlayer] maybePlay - shouldPlay:', shouldPlay, 'isActivePlayer:', isActivePlayer, 'paused:', audio.paused);
+
+        // Only play audio if this device is the active player
+        if (shouldPlay && isActivePlayer && audio.paused) {
+          // Check if audio is ready to play
+          if (audio.readyState >= 2) {
+            this.doPlay();
+          } else {
+            console.log('[AudioPlayer] audio not ready, setting pendingPlay');
+            this.pendingPlay = true;
+            audio.load();
+          }
+        } else if ((!shouldPlay || !isActivePlayer) && !audio.paused) {
+          // Pause if we shouldn't be playing OR if we're not the active player
+          console.log('[AudioPlayer] pausing - shouldPlay:', shouldPlay, 'isActivePlayer:', isActivePlayer);
           audio.pause();
         }
+      },
+
+      doPlay() {
+        const audio = this.el;
+        const isActivePlayer = audio.dataset.isActivePlayer === 'true';
+        // Double-check we're still the active player before playing
+        if (!isActivePlayer) {
+          console.log('[AudioPlayer] doPlay aborted - not active player');
+          return;
+        }
+        console.log('[AudioPlayer] doPlay called, readyState:', audio.readyState);
+        audio.play()
+          .then(() => console.log('[AudioPlayer] play() succeeded'))
+          .catch(err => console.error('[AudioPlayer] Play failed:', err));
+      }
+    }
+  </script>
+
+  <!-- Collocated JS Hook for Progress Bar seeking -->
+  <script :type={Phoenix.LiveView.ColocatedHook} name=".ProgressBar">
+    export default {
+      mounted() {
+        this.el.addEventListener('click', (e) => {
+          const rect = this.el.getBoundingClientRect();
+          const clickX = e.clientX - rect.left;
+          const percentage = clickX / rect.width;
+          const duration = parseFloat(this.el.dataset.duration) || 0;
+          const position = percentage * duration;
+
+          // Send seek event to server
+          this.pushEvent('seek_to_position', { position: position });
+
+          // Also seek the audio element directly for immediate feedback
+          const audio = document.getElementById('audio-player');
+          if (audio) {
+            audio.currentTime = position;
+          }
+        });
       }
     }
   </script>

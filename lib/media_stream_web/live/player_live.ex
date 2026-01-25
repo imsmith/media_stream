@@ -3,32 +3,34 @@ defmodule MediaStreamWeb.PlayerLive do
   alias MediaStream.Media
   alias Phoenix.PubSub
 
+  @global_playback_id "GLOBAL"
+
   @impl true
   def mount(_params, session, socket) do
-    # Generate or retrieve device ID from session
+    # Device ID is kept for listening history, but playback syncs globally
     device_id = session["device_id"] || generate_device_id()
 
     if connected?(socket) do
-      # Subscribe to playback updates for this device
-      PubSub.subscribe(MediaStream.PubSub, "playback:#{device_id}")
+      # Subscribe to global playback updates (all devices share the same state)
+      PubSub.subscribe(MediaStream.PubSub, "playback:#{@global_playback_id}")
     end
 
     # Load all audio files
     audio_files = Media.list_audio_files()
 
-    # Restore playback state if it exists
-    playback_state = Media.get_playback_state(device_id)
+    # Restore global playback state
+    playback_state = Media.get_playback_state(@global_playback_id)
 
-    {current_file, queue, position} =
+    {current_file, queue, position, playing, active_player_id} =
       case playback_state do
         nil ->
-          {nil, [], 0.0}
+          {nil, [], 0.0, false, nil}
 
         state ->
           current = if state.current_file_id, do: Media.get_audio_file!(state.current_file_id)
           queue_ids = decode_queue(state.queue_json)
           queue_files = Enum.map(queue_ids, &Media.get_audio_file!/1)
-          {current, queue_files, state.position_seconds || 0.0}
+          {current, queue_files, state.position_seconds || 0.0, state.playing || false, state.active_player_id}
       end
 
     {:ok,
@@ -39,7 +41,9 @@ defmodule MediaStreamWeb.PlayerLive do
      |> assign(:current_file, current_file)
      |> assign(:queue, queue)
      |> assign(:position, position)
-     |> assign(:playing, false)
+     |> assign(:playing, playing)
+     |> assign(:active_player_id, active_player_id)
+     |> assign(:remote_control_mode, false)
      |> assign(:search_query, "")
      |> assign(:upload_error, nil)
      |> assign(:scan_status, nil)
@@ -64,29 +68,30 @@ defmodule MediaStreamWeb.PlayerLive do
 
   def handle_event("add_to_queue", %{"id" => id}, socket) do
     file = Media.get_audio_file!(String.to_integer(id))
-    queue = socket.assigns.queue ++ [file]
 
-    # If queue was empty and no current file, auto-play the first track
-    {current_file, updated_queue, playing} =
-      if socket.assigns.queue == [] && socket.assigns.current_file == nil do
-        # Start playing the first track
-        update_state(socket, %{
-          current_file_id: file.id,
-          position_seconds: 0.0,
-          queue_json: encode_queue([])
-        })
-        {file, [], true}
-      else
-        # Just add to queue
-        update_state(socket, %{queue_json: encode_queue(queue)})
-        {socket.assigns.current_file, queue, socket.assigns.playing}
-      end
+    # If nothing is currently playing, auto-play this track
+    # Otherwise, add to queue
+    if not socket.assigns.playing do
+      # Start playing this track immediately
+      update_state(socket, %{
+        current_file_id: file.id,
+        position_seconds: 0.0,
+        queue_json: encode_queue(socket.assigns.queue),
+        playing: true
+      })
 
-    {:noreply,
-     socket
-     |> assign(:queue, updated_queue)
-     |> assign(:current_file, current_file)
-     |> assign(:playing, playing)}
+      {:noreply,
+       socket
+       |> assign(:current_file, file)
+       |> assign(:position, 0.0)
+       |> assign(:playing, true)}
+    else
+      # Something is playing, add to queue
+      queue = socket.assigns.queue ++ [file]
+      update_state(socket, %{queue_json: encode_queue(queue)})
+
+      {:noreply, assign(socket, :queue, queue)}
+    end
   end
 
   def handle_event("remove_from_queue", %{"id" => id}, socket) do
@@ -103,7 +108,7 @@ defmodule MediaStreamWeb.PlayerLive do
     file = Media.get_audio_file!(String.to_integer(id))
 
     # Update playback state
-    update_state(socket, %{current_file_id: file.id, position_seconds: 0.0})
+    update_state(socket, %{current_file_id: file.id, position_seconds: 0.0, playing: true})
 
     {:noreply,
      socket
@@ -113,15 +118,27 @@ defmodule MediaStreamWeb.PlayerLive do
   end
 
   def handle_event("pause", _params, socket) do
+    update_state(socket, %{playing: false})
     {:noreply, assign(socket, :playing, false)}
   end
 
   def handle_event("resume", _params, socket) do
+    update_state(socket, %{playing: true})
     {:noreply, assign(socket, :playing, true)}
   end
 
   def handle_event("seek", %{"position" => position}, socket) do
     position_float = String.to_float(position)
+
+    # Update playback state
+    update_state(socket, %{position_seconds: position_float})
+
+    {:noreply, assign(socket, :position, position_float)}
+  end
+
+  def handle_event("seek_to_position", %{"position" => position}, socket) do
+    # Handle click on progress bar - position is calculated by JS hook
+    position_float = if is_float(position), do: position, else: position / 1
 
     # Update playback state
     update_state(socket, %{position_seconds: position_float})
@@ -139,7 +156,8 @@ defmodule MediaStreamWeb.PlayerLive do
         update_state(socket, %{
           current_file_id: next_file.id,
           position_seconds: 0.0,
-          queue_json: encode_queue(rest)
+          queue_json: encode_queue(rest),
+          playing: true
         })
 
         {:noreply,
@@ -260,9 +278,19 @@ defmodule MediaStreamWeb.PlayerLive do
     {:noreply, assign(socket, :directory_path, path)}
   end
 
+  def handle_event("toggle_remote_control", _params, socket) do
+    {:noreply, assign(socket, :remote_control_mode, !socket.assigns.remote_control_mode)}
+  end
+
+  def handle_event("claim_active_player", _params, socket) do
+    # Explicitly claim this device as the active player
+    update_state(socket, %{active_player_id: socket.assigns.device_id})
+    {:noreply, assign(socket, :active_player_id, socket.assigns.device_id)}
+  end
+
   @impl true
   def handle_info({:playback_state_updated, state}, socket) do
-    # Sync from other device
+    # Sync from other device/tab
     current = if state.current_file_id, do: Media.get_audio_file!(state.current_file_id)
     queue_ids = decode_queue(state.queue_json)
     queue_files = Enum.map(queue_ids, &Media.get_audio_file!/1)
@@ -271,7 +299,9 @@ defmodule MediaStreamWeb.PlayerLive do
      socket
      |> assign(:current_file, current)
      |> assign(:queue, queue_files)
-     |> assign(:position, state.position_seconds || 0.0)}
+     |> assign(:position, state.position_seconds || 0.0)
+     |> assign(:playing, state.playing || false)
+     |> assign(:active_player_id, state.active_player_id)}
   end
 
   def handle_info(:play_next, socket) do
@@ -279,6 +309,7 @@ defmodule MediaStreamWeb.PlayerLive do
     case socket.assigns.queue do
       [] ->
         # No more tracks, stop playing
+        update_state(socket, %{playing: false})
         {:noreply, assign(socket, :playing, false)}
 
       [next_file | rest] ->
@@ -286,7 +317,8 @@ defmodule MediaStreamWeb.PlayerLive do
         update_state(socket, %{
           current_file_id: next_file.id,
           position_seconds: 0.0,
-          queue_json: encode_queue(rest)
+          queue_json: encode_queue(rest),
+          playing: true
         })
 
         {:noreply,
@@ -299,8 +331,24 @@ defmodule MediaStreamWeb.PlayerLive do
   end
 
   defp update_state(socket, attrs) do
-    attrs_with_device = Map.put(attrs, :device_id, socket.assigns.device_id)
-    Media.update_playback_state(socket.assigns.device_id, attrs_with_device)
+    # All devices share the global playback state
+    # If not in remote control mode, also claim this device as the active player
+    attrs_with_device =
+      attrs
+      |> Map.put(:device_id, @global_playback_id)
+      |> maybe_claim_active_player(socket)
+
+    Media.update_playback_state(@global_playback_id, attrs_with_device)
+  end
+
+  defp maybe_claim_active_player(attrs, socket) do
+    if socket.assigns.remote_control_mode do
+      # Remote control mode: don't change active player
+      attrs
+    else
+      # Normal mode: this device becomes the active player
+      Map.put(attrs, :active_player_id, socket.assigns.device_id)
+    end
   end
 
   defp encode_queue(queue) do
