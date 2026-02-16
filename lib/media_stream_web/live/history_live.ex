@@ -1,10 +1,15 @@
 defmodule MediaStreamWeb.HistoryLive do
   use MediaStreamWeb, :live_view
   alias MediaStream.Media
+  alias Phoenix.PubSub
 
   @impl true
   def mount(_params, session, socket) do
     device_id = session["device_id"] || generate_device_id()
+
+    if connected?(socket) do
+      PubSub.subscribe(MediaStream.PubSub, "listening_history")
+    end
 
     # Load listening history
     history = Media.list_listening_history()
@@ -67,7 +72,27 @@ defmodule MediaStreamWeb.HistoryLive do
      |> assign(:filtered_history, history)}
   end
 
+  @impl true
+  def handle_info({:history_updated, entry}, socket) do
+    history = upsert_history(socket.assigns.history, entry)
+    filtered = filter_history(history, socket.assigns.search_query)
+
+    {:noreply,
+     socket
+     |> assign(:history, history)
+     |> assign(:filtered_history, filtered)}
+  end
+
+  # Insert new entry at top, or replace existing entry in-place
+  defp upsert_history(history, entry) do
+    case Enum.find_index(history, &(&1.id == entry.id)) do
+      nil -> [entry | history]
+      idx -> List.replace_at(history, idx, entry)
+    end
+  end
+
   defp filter_history(history, ""), do: history
+  defp filter_history(history, nil), do: history
 
   defp filter_history(history, query) do
     search_term = String.downcase(query)
@@ -100,5 +125,20 @@ defmodule MediaStreamWeb.HistoryLive do
     minutes = div(seconds, 60)
     secs = rem(seconds, 60)
     "#{minutes}:#{String.pad_leading(Integer.to_string(secs), 2, "0")}"
+  end
+
+  defp entry_status(entry) do
+    cond do
+      is_nil(entry.completed_at) ->
+        :playing
+
+      not is_nil(entry.audio_file.duration_seconds) and
+        entry.audio_file.duration_seconds > 0 and
+          entry.duration_listened_seconds >= entry.audio_file.duration_seconds - 5 ->
+        :completed
+
+      true ->
+        :stopped
+    end
   end
 end

@@ -48,6 +48,7 @@ defmodule MediaStreamWeb.PlayerLive do
      |> assign(:upload_error, nil)
      |> assign(:scan_status, nil)
      |> assign(:directory_path, "")
+     |> assign(:current_history_id, nil)
      |> allow_upload(:playlist, accept: [".m3u", ".m3u8"], max_entries: 1)}
   end
 
@@ -84,7 +85,8 @@ defmodule MediaStreamWeb.PlayerLive do
        socket
        |> assign(:current_file, file)
        |> assign(:position, 0.0)
-       |> assign(:playing, true)}
+       |> assign(:playing, true)
+       |> start_history_entry(file.id)}
     else
       # Something is playing, add to queue
       queue = socket.assigns.queue ++ [file]
@@ -114,12 +116,16 @@ defmodule MediaStreamWeb.PlayerLive do
      socket
      |> assign(:current_file, file)
      |> assign(:position, 0.0)
-     |> assign(:playing, true)}
+     |> assign(:playing, true)
+     |> start_history_entry(file.id)}
   end
 
   def handle_event("pause", _params, socket) do
     update_state(socket, %{playing: false})
-    {:noreply, assign(socket, :playing, false)}
+    {:noreply,
+     socket
+     |> assign(:playing, false)
+     |> finalize_history_entry()}
   end
 
   def handle_event("resume", _params, socket) do
@@ -165,7 +171,8 @@ defmodule MediaStreamWeb.PlayerLive do
          |> assign(:current_file, next_file)
          |> assign(:queue, rest)
          |> assign(:position, 0.0)
-         |> assign(:playing, true)}
+         |> assign(:playing, true)
+         |> start_history_entry(next_file.id)}
     end
   end
 
@@ -310,7 +317,10 @@ defmodule MediaStreamWeb.PlayerLive do
       [] ->
         # No more tracks, stop playing
         update_state(socket, %{playing: false})
-        {:noreply, assign(socket, :playing, false)}
+        {:noreply,
+         socket
+         |> assign(:playing, false)
+         |> finalize_history_entry()}
 
       [next_file | rest] ->
         # Play next track
@@ -326,7 +336,8 @@ defmodule MediaStreamWeb.PlayerLive do
          |> assign(:current_file, next_file)
          |> assign(:queue, rest)
          |> assign(:position, 0.0)
-         |> assign(:playing, true)}
+         |> assign(:playing, true)
+         |> start_history_entry(next_file.id)}
     end
   end
 
@@ -369,6 +380,42 @@ defmodule MediaStreamWeb.PlayerLive do
   defp generate_device_id do
     :crypto.strong_rand_bytes(8)
     |> Base.encode16(case: :upper)
+  end
+
+  defp start_history_entry(socket, audio_file_id) do
+    # Finalize any existing history entry first
+    socket = finalize_history_entry(socket)
+
+    case Media.create_listening_history(%{
+      audio_file_id: audio_file_id,
+      device_id: socket.assigns.device_id,
+      started_at: DateTime.utc_now()
+    }) do
+      {:ok, entry} -> assign(socket, :current_history_id, entry.id)
+      {:error, _} -> socket
+    end
+  end
+
+  defp finalize_history_entry(socket) do
+    case socket.assigns.current_history_id do
+      nil ->
+        socket
+
+      history_id ->
+        case Media.get_listening_history(history_id) do
+          nil ->
+            socket
+
+          entry ->
+            now = DateTime.utc_now()
+            duration = DateTime.diff(now, entry.started_at, :second)
+            Media.update_listening_history(entry, %{
+              completed_at: now,
+              duration_listened_seconds: max(duration, 0)
+            })
+            assign(socket, :current_history_id, nil)
+        end
+    end
   end
 
   defp format_duration(nil), do: "0:00"

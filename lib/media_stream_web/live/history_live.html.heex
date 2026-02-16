@@ -12,16 +12,18 @@
         <!-- Search -->
         <div>
           <label class="block text-xs font-bold mb-2">SEARCH HISTORY</label>
-          <input
-            type="text"
-            phx-change="search"
-            name="query"
-            value={@search_query}
-            placeholder="SEARCH BY TITLE, ARTIST, ALBUM..."
-            class="w-full bg-white text-black px-4 py-3 border-2 border-black font-mono text-sm focus:outline-none focus:ring-2 focus:ring-white"
-          />
+          <form phx-change="search" phx-submit="search">
+            <input
+              type="text"
+              name="query"
+              value={@search_query}
+              placeholder="SEARCH BY TITLE, ARTIST, ALBUM..."
+              phx-debounce="300"
+              class="w-full bg-white text-black px-4 py-3 border-2 border-black font-mono text-sm focus:outline-none focus:ring-2 focus:ring-white"
+            />
+          </form>
         </div>
-        
+
 <!-- Date Range Filter -->
         <div class="grid grid-cols-2 gap-4">
           <div>
@@ -43,7 +45,7 @@
             />
           </div>
         </div>
-        
+
 <!-- Filter Buttons -->
         <div class="flex gap-2">
           <button
@@ -69,7 +71,7 @@
           </button>
         </div>
       </div>
-      
+
 <!-- History List -->
       <div class="mb-4">
         <h2 class="text-xl font-bold border-b-2 border-white pb-2 mb-4">
@@ -85,10 +87,34 @@
       <% else %>
         <div class="space-y-1">
           <%= for entry <- @filtered_history do %>
-            <div class="bg-gray-900 border-2 border-gray-700 p-4">
+            <% status = entry_status(entry) %>
+            <div class={[
+              "border-2 p-4",
+              case status do
+                :playing -> "bg-gray-800 border-green-500"
+                :completed -> "bg-gray-900 border-gray-700"
+                :stopped -> "bg-gray-900 border-yellow-700"
+              end
+            ]}>
               <div class="flex justify-between items-start">
                 <div class="flex-1">
-                  <div class="font-bold text-sm uppercase">{entry.audio_file.title}</div>
+                  <div class="flex items-center gap-2">
+                    <div class="font-bold text-sm uppercase">{entry.audio_file.title}</div>
+                    <span class={[
+                      "text-xs px-2 py-0.5 font-bold",
+                      case status do
+                        :playing -> "bg-green-600 text-white"
+                        :completed -> "bg-gray-600 text-gray-200"
+                        :stopped -> "bg-yellow-700 text-black"
+                      end
+                    ]}>
+                      {case status do
+                        :playing -> "NOW PLAYING"
+                        :completed -> "COMPLETED"
+                        :stopped -> "STOPPED"
+                      end}
+                    </span>
+                  </div>
                   <div class="text-xs text-gray-400 mt-1">
                     ARTIST: {entry.audio_file.artist || "UNKNOWN"} • ALBUM: {entry.audio_file.album ||
                       "UNKNOWN"}
@@ -98,15 +124,18 @@
                   <div class="font-bold">{format_datetime(entry.started_at)}</div>
                   <%= if entry.completed_at do %>
                     <div class="mt-1">
-                      COMPLETED: {format_datetime(entry.completed_at)}
+                      ENDED: {format_datetime(entry.completed_at)}
                     </div>
                   <% end %>
                   <div class="mt-1">
                     LISTENED: {format_duration(entry.duration_listened_seconds)}
+                    <%= if entry.audio_file.duration_seconds && entry.audio_file.duration_seconds > 0 do %>
+                      / {format_duration(entry.audio_file.duration_seconds)}
+                    <% end %>
                   </div>
                 </div>
               </div>
-              
+
 <!-- Device Info -->
               <div class="mt-2 pt-2 border-t border-gray-700 text-xs text-gray-500">
                 DEVICE: {entry.device_id}
@@ -115,7 +144,7 @@
           <% end %>
         </div>
       <% end %>
-      
+
 <!-- Back to Player -->
       <div class="mt-6">
         <a

@@ -1,0 +1,18 @@
+# Build and deps
+/_build/
+/deps/
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Generated static assets
+/priv/static/assets/
+
+# OS files
+.DS_Store
+
+# Editor
+*.swp
+*~

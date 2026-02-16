@@ -34,14 +34,16 @@
 
         <div class="mb-6">
           <label class="block text-xs font-bold mb-2">SEARCH LIBRARY</label>
-          <input
-            type="text"
-            phx-change="search"
-            name="query"
-            value={@search_query}
-            placeholder="SEARCH BY TITLE, ARTIST, ALBUM..."
-            class="w-full bg-white text-black px-4 py-3 border-2 border-black font-mono text-sm focus:outline-none focus:ring-2 focus:ring-white"
-          />
+          <form phx-change="search" phx-submit="search">
+            <input
+              type="text"
+              name="query"
+              value={@search_query}
+              placeholder="SEARCH BY TITLE, ARTIST, ALBUM..."
+              phx-debounce="300"
+              class="w-full bg-white text-black px-4 py-3 border-2 border-black font-mono text-sm focus:outline-none focus:ring-2 focus:ring-white"
+            />
+          </form>
         </div>
 
         <div class="mb-4">
@@ -182,6 +184,7 @@
               phx-hook=".AudioPlayer"
               data-playing={to_string(@playing == true)}
               data-is-active-player={to_string(@active_player_id == @device_id)}
+              data-position={@position}
               src={~p"/audio/#{@current_file.id}"}
               preload="auto"
             >
@@ -372,7 +375,8 @@
       updated() {
         const audio = this.el;
         const isActivePlayer = audio.dataset.isActivePlayer === 'true';
-        console.log('[AudioPlayer] updated, src:', audio.src, 'isActivePlayer:', isActivePlayer, 'data-playing:', audio.dataset.playing);
+        const serverPosition = parseFloat(audio.dataset.position) || 0;
+        console.log('[AudioPlayer] updated, src:', audio.src, 'isActivePlayer:', isActivePlayer, 'data-playing:', audio.dataset.playing, 'serverPos:', serverPosition, 'audioPos:', audio.currentTime);
 
         // Check if src changed (new track)
         if (audio.src !== this.lastSrc) {
@@ -382,6 +386,13 @@
           this.pendingPlay = audio.dataset.playing === 'true' && isActivePlayer;
           audio.load();
         } else {
+          // Sync position if server position diverges significantly from local
+          // (means another device seeked or we're resuming on a new device)
+          const drift = Math.abs(audio.currentTime - serverPosition);
+          if (drift > 3 && audio.readyState >= 2) {
+            console.log('[AudioPlayer] syncing position, drift:', drift);
+            audio.currentTime = serverPosition;
+          }
           this.maybePlay();
         }
       },
@@ -416,6 +427,12 @@
         if (!isActivePlayer) {
           console.log('[AudioPlayer] doPlay aborted - not active player');
           return;
+        }
+        // Sync position before playing (critical for cross-device resume)
+        const serverPosition = parseFloat(audio.dataset.position) || 0;
+        if (Math.abs(audio.currentTime - serverPosition) > 1) {
+          console.log('[AudioPlayer] doPlay syncing position to', serverPosition);
+          audio.currentTime = serverPosition;
         }
         console.log('[AudioPlayer] doPlay called, readyState:', audio.readyState);
         audio.play()

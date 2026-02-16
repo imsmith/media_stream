@@ -31,14 +31,14 @@ defmodule MediaStream.Media do
 
   """
   def search_audio_files(query) when is_binary(query) do
-    search_term = "%#{query}%"
+    search_term = "%#{String.downcase(query)}%"
 
     AudioFile
     |> where(
       [a],
-      ilike(a.title, ^search_term) or
-        ilike(a.artist, ^search_term) or
-        ilike(a.album, ^search_term)
+      like(fragment("lower(?)", a.title), ^search_term) or
+        like(fragment("lower(?)", a.artist), ^search_term) or
+        like(fragment("lower(?)", a.album), ^search_term)
     )
     |> Repo.all()
   end
@@ -132,18 +132,18 @@ defmodule MediaStream.Media do
     file_type = Path.extname(file_path)
     file_size = File.stat!(file_path).size
 
-    # Extract metadata from filename and directory structure
-    metadata = extract_metadata_from_path(file_path, file_name)
+    # Extract embedded metadata and duration via ffprobe (single call)
+    probe = probe_file(file_path)
 
-    # Extract duration from audio file
-    duration = extract_duration(file_path)
+    # Fall back to filename/directory parsing for missing fields
+    path_metadata = extract_metadata_from_path(file_path, file_name)
 
     attrs = %{
       path: file_path,
-      title: metadata.title,
-      artist: metadata.artist,
-      album: metadata.album,
-      duration_seconds: duration,
+      title: probe[:title] || path_metadata.title,
+      artist: probe[:artist] || path_metadata.artist,
+      album: probe[:album] || path_metadata.album,
+      duration_seconds: probe[:duration] || 0,
       file_type: file_type,
       file_size: file_size
     }
@@ -151,27 +151,33 @@ defmodule MediaStream.Media do
     create_audio_file(attrs)
   end
 
-  # Extracts duration from audio file using ffprobe.
-  # Returns duration in seconds (integer) or 0 if extraction fails.
-  defp extract_duration(file_path) do
+  # Single ffprobe call to extract both metadata tags and duration.
+  defp probe_file(file_path) do
     case System.cmd("ffprobe", [
       "-v", "error",
-      "-show_entries", "format=duration",
-      "-of", "default=noprint_wrappers=1:nokey=1",
+      "-show_entries", "format=duration:format_tags=artist,album,title",
+      "-of", "default=noprint_wrappers=1",
       file_path
     ], stderr_to_stdout: true) do
       {output, 0} ->
         output
-        |> String.trim()
-        |> Float.parse()
-        |> case do
-          {duration, _} -> trunc(duration)
-          :error -> 0
-        end
+        |> String.split("\n", trim: true)
+        |> Enum.reduce(%{}, fn line, acc ->
+          case String.split(line, "=", parts: 2) do
+            ["duration", val] ->
+              case Float.parse(val) do
+                {d, _} -> Map.put(acc, :duration, trunc(d))
+                :error -> acc
+              end
+            ["TAG:title", val] -> Map.put(acc, :title, String.trim(val))
+            ["TAG:artist", val] -> Map.put(acc, :artist, String.trim(val))
+            ["TAG:album", val] -> Map.put(acc, :album, String.trim(val))
+            _ -> acc
+          end
+        end)
 
       _ ->
-        # ffprobe failed, return 0
-        0
+        %{}
     end
   end
 
@@ -290,9 +296,46 @@ defmodule MediaStream.Media do
 
   """
   def create_listening_history(attrs \\ %{}) do
-    %MediaStream.Media.ListeningHistory{}
-    |> MediaStream.Media.ListeningHistory.changeset(attrs)
-    |> Repo.insert()
+    result =
+      %MediaStream.Media.ListeningHistory{}
+      |> MediaStream.Media.ListeningHistory.changeset(attrs)
+      |> Repo.insert()
+
+    case result do
+      {:ok, entry} ->
+        entry = Repo.preload(entry, :audio_file)
+        broadcast_history_update(entry)
+        {:ok, entry}
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Updates a listening history entry (e.g., to set completed_at and duration).
+  """
+  def update_listening_history(%MediaStream.Media.ListeningHistory{} = entry, attrs) do
+    result =
+      entry
+      |> MediaStream.Media.ListeningHistory.changeset(attrs)
+      |> Repo.update()
+
+    case result do
+      {:ok, updated} ->
+        updated = Repo.preload(updated, :audio_file)
+        broadcast_history_update(updated)
+        {:ok, updated}
+
+      error ->
+        error
+    end
+  end
+
+  def get_listening_history(id), do: Repo.get(MediaStream.Media.ListeningHistory, id)
+
+  defp broadcast_history_update(entry) do
+    PubSub.broadcast(MediaStream.PubSub, "listening_history", {:history_updated, entry})
   end
 
   @doc """
@@ -348,14 +391,14 @@ defmodule MediaStream.Media do
 
     query =
       if query do
-        search_term = "%#{query}%"
+        search_term = "%#{String.downcase(query)}%"
 
         from h in base_query,
           join: a in assoc(h, :audio_file),
           where:
-            ilike(a.title, ^search_term) or
-              ilike(a.artist, ^search_term) or
-              ilike(a.album, ^search_term)
+            like(fragment("lower(?)", a.title), ^search_term) or
+              like(fragment("lower(?)", a.artist), ^search_term) or
+              like(fragment("lower(?)", a.album), ^search_term)
       else
         base_query
       end
