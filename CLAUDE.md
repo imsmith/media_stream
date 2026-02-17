@@ -13,6 +13,7 @@ MediaStream is a Phoenix LiveView application for streaming audio files with mul
 - **Web Server**: Bandit 1.5 (replacing Cowboy)
 - **Frontend**: Tailwind CSS 4.1.7, esbuild 0.25.4
 - **Real-time**: Phoenix PubSub for cross-device state synchronization
+- **Shared Infrastructure**: Comn v0.3.0 (structured errors, events, process-scoped contexts)
 
 ## Common Commands
 
@@ -76,11 +77,26 @@ Key functions:
 - `parse_playlist/1` and `load_playlist_queue/1` - M3U/M3U8 playlist support
 - `update_playback_state/2` - Upserts playback state and broadcasts via PubSub
 
+### Comn Integration
+
+MediaStream uses [Comn](https://github.com/imsmith/comn) v0.3.0 for shared infrastructure:
+
+- **Comn.Events.EventStruct** — All PubSub broadcasts use structured event structs (`{:event, topic, %EventStruct{}}`) instead of bare tuples
+- **Comn.EventLog** — In-memory audit log (Agent) records all playback and history events; query via `Comn.EventLog.all()`
+- **Comn.Contexts** — Process-scoped context initialized per request (DeviceId plug) and per LiveView mount, carrying device_id metadata
+- **Comn.Errors** — `Comn.Errors.wrap/1` converts raw error terms into `ErrorStruct` with categorized messages for flash display
+
+Supervisor children in `application.ex`:
+```elixir
+{Registry, keys: :duplicate, name: Comn.EventBus},
+{Comn.EventLog, []},
+```
+
 ### Real-time Sync Architecture
 
-**Device ID Generation**: Each browser session gets a unique device_id (8 random bytes, Base16 encoded) stored in session. This identifies playback state per device.
+**Device ID Generation**: Each browser session gets a unique device_id (8 random bytes, Base16 encoded) stored in session. The DeviceId plug also initializes a `Comn.Contexts` with the device_id for the HTTP process. LiveView mounts set their own context (separate process).
 
-**PubSub Broadcasting**: When playback state changes (position, current file, queue), it broadcasts to `"playback:#{device_id}"` topic. The PlayerLive subscribes to this topic on mount, enabling cross-tab/cross-device sync.
+**PubSub Broadcasting**: When playback state changes (position, current file, queue), the Media context creates a `Comn.Events.EventStruct`, logs it to `Comn.EventLog`, then broadcasts `{:event, topic, event_struct}` to the PubSub topic. LiveViews pattern-match on `{:event, topic, %Comn.Events.EventStruct{type: type, data: data}}`.
 
 **State Persistence**: PlaybackState stores the queue as JSON in the database. On page load, the state is restored from DB, allowing playback to resume after closing/reopening the app.
 
@@ -160,6 +176,10 @@ Queue is stored as JSON array of IDs. Use `encode_queue/1` and `decode_queue/1` 
 ### PubSub Pattern
 
 1. Update DB via context function
-2. Context function broadcasts on success
+2. Context function creates `Comn.Events.EventStruct`, logs to `Comn.EventLog`, broadcasts `{:event, topic, event_struct}` via PubSub
 3. LiveView subscribes to topic in `mount/3` with `connected?/1` guard
-4. Handle broadcast in `handle_info/2`
+4. Handle broadcast in `handle_info/2` by pattern-matching `{:event, topic, %Comn.Events.EventStruct{type: type, data: data}}`
+
+### Error Handling
+
+Errors surfacing to LiveViews are wrapped via `Comn.Errors.wrap/1` which returns an `ErrorStruct` with a `.message` field suitable for `put_flash/3`.

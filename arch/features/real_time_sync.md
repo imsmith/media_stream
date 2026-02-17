@@ -51,16 +51,16 @@ See [arch/diagrams/pubsub_flow.mmd](../diagrams/pubsub_flow.mmd) for detailed se
 
 ### Generation
 
-Device ID generated on first session:
+Device ID generated on first session via the DeviceId plug, which also initializes a Comn context:
 
 ```elixir
-# In PlayerLive.mount/3
-device_id = session["device_id"] || generate_device_id()
+# In DeviceId plug
+device_id = get_session(conn, "device_id") || generate_device_id()
+Comn.Contexts.new(%{metadata: %{device_id: device_id}})
 
-defp generate_device_id do
-  :crypto.strong_rand_bytes(8)
-  |> Base.encode16(case: :upper)
-end
+# In LiveView mount (separate process, sets its own context)
+device_id = session["device_id"] || generate_device_id()
+Comn.Contexts.new(%{metadata: %{device_id: device_id}})
 ```
 
 **Format**: 16-character uppercase hexadecimal
@@ -134,14 +134,21 @@ end
 
 ### Broadcasting
 
-Every state change broadcasts update:
+Every state change creates a structured Comn event, logs it, and broadcasts:
 
 ```elixir
 defp broadcast_playback_update({:ok, playback_state} = result) do
+  event = Comn.Events.EventStruct.new(
+    :playback_state_updated,
+    "playback:#{playback_state.device_id}",
+    playback_state,
+    :media_stream
+  )
+  Comn.EventLog.record(event)
   PubSub.broadcast(
     MediaStream.PubSub,
     "playback:#{playback_state.device_id}",
-    {:playback_state_updated, playback_state}
+    {:event, event.topic, event}
   )
 
   result
@@ -157,10 +164,10 @@ end
 
 ### Receiving Updates
 
-Handle broadcast in LiveView:
+Handle structured event broadcast in LiveView:
 
 ```elixir
-def handle_info({:playback_state_updated, state}, socket) do
+def handle_info({:event, "playback:" <> _, %Comn.Events.EventStruct{type: :playback_state_updated, data: state}}, socket) do
   # Sync from other tab
   current = if state.current_file_id, do: Media.get_audio_file!(state.current_file_id)
   queue_ids = decode_queue(state.queue_json)

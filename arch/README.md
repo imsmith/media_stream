@@ -263,11 +263,13 @@ audio_file
 
 ### PubSub for Real-Time
 
-Broadcast state changes for synchronization:
+Broadcast state changes as structured Comn events:
 ```elixir
-# Update database, then broadcast
+# Update database, create event, log, then broadcast
 {:ok, state} = Repo.update(changeset)
-PubSub.broadcast(topic, {:playback_state_updated, state})
+event = Comn.Events.EventStruct.new(:playback_state_updated, topic, state, :media_stream)
+Comn.EventLog.record(event)
+PubSub.broadcast(MediaStream.PubSub, topic, {:event, event.topic, event})
 ```
 
 ### Session Persistence
@@ -299,6 +301,7 @@ Store state in database for session restoration:
 
 ### Error Handling
 
+Errors are wrapped with Comn.Errors for consistent, categorized messages:
 ```elixir
 case Media.operation() do
   {:ok, result} ->
@@ -306,8 +309,8 @@ case Media.operation() do
     {:noreply, assign(socket, ...) |> put_flash(:info, "Success")}
 
   {:error, reason} ->
-    # Error path
-    {:noreply, put_flash(socket, :error, "Error: #{reason}")}
+    error = Comn.Errors.wrap(reason)
+    {:noreply, put_flash(socket, :error, error.message)}
 end
 ```
 
