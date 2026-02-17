@@ -275,10 +275,17 @@ defmodule MediaStream.Media do
   end
 
   defp broadcast_playback_update({:ok, playback_state} = result) do
+    event = Comn.Events.EventStruct.new(
+      :playback_state_updated,
+      "playback:#{playback_state.device_id}",
+      playback_state,
+      :media_stream
+    )
+    Comn.EventLog.record(event)
     PubSub.broadcast(
       MediaStream.PubSub,
       "playback:#{playback_state.device_id}",
-      {:playback_state_updated, playback_state}
+      {:event, event.topic, event}
     )
 
     result
@@ -335,7 +342,14 @@ defmodule MediaStream.Media do
   def get_listening_history(id), do: Repo.get(MediaStream.Media.ListeningHistory, id)
 
   defp broadcast_history_update(entry) do
-    PubSub.broadcast(MediaStream.PubSub, "listening_history", {:history_updated, entry})
+    event = Comn.Events.EventStruct.new(
+      :history_updated,
+      "listening_history",
+      entry,
+      :media_stream
+    )
+    Comn.EventLog.record(event)
+    PubSub.broadcast(MediaStream.PubSub, "listening_history", {:event, event.topic, event})
   end
 
   @doc """

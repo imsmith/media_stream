@@ -14,8 +14,9 @@ defmodule MediaStream.Application do
        repos: Application.fetch_env!(:media_stream, :ecto_repos), skip: skip_migrations?()},
       {DNSCluster, query: Application.get_env(:media_stream, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: MediaStream.PubSub},
-      # Start a worker by calling: MediaStream.Worker.start_link(arg)
-      # {MediaStream.Worker, arg},
+      # Comn services
+      {Registry, keys: :duplicate, name: Comn.EventBus},
+      {Comn.EventLog, []},
       # Start to serve requests, typically the last entry
       MediaStreamWeb.Endpoint
     ]

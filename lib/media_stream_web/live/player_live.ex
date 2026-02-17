@@ -9,6 +9,7 @@ defmodule MediaStreamWeb.PlayerLive do
   def mount(_params, session, socket) do
     # Device ID is kept for listening history, but playback syncs globally
     device_id = session["device_id"] || generate_device_id()
+    Comn.Contexts.new(%{metadata: %{device_id: device_id}})
 
     if connected?(socket) do
       # Subscribe to global playback updates (all devices share the same state)
@@ -272,11 +273,12 @@ defmodule MediaStreamWeb.PlayerLive do
            |> put_flash(:info, "Scanned #{scanned} files: #{added} added, #{skipped} skipped")}
 
         {:error, reason} ->
+          error = Comn.Errors.wrap(reason)
           {:noreply,
            socket
-           |> assign(:scan_status, "Error: #{inspect(reason)}")
+           |> assign(:scan_status, "Error: #{error.message}")
            |> assign(:directory_path, path)
-           |> put_flash(:error, "Failed to scan directory")}
+           |> put_flash(:error, error.message)}
       end
     end
   end
@@ -296,7 +298,7 @@ defmodule MediaStreamWeb.PlayerLive do
   end
 
   @impl true
-  def handle_info({:playback_state_updated, state}, socket) do
+  def handle_info({:event, "playback:" <> _, %Comn.Events.EventStruct{type: :playback_state_updated, data: state}}, socket) do
     # Sync from other device/tab
     current = if state.current_file_id, do: Media.get_audio_file!(state.current_file_id)
     queue_ids = decode_queue(state.queue_json)
@@ -392,7 +394,9 @@ defmodule MediaStreamWeb.PlayerLive do
       started_at: DateTime.utc_now()
     }) do
       {:ok, entry} -> assign(socket, :current_history_id, entry.id)
-      {:error, _} -> socket
+      {:error, reason} ->
+        error = Comn.Errors.wrap(reason)
+        socket |> put_flash(:error, error.message)
     end
   end
 

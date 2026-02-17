@@ -6,6 +6,7 @@ defmodule MediaStreamWeb.HistoryLive do
   @impl true
   def mount(_params, session, socket) do
     device_id = session["device_id"] || generate_device_id()
+    Comn.Contexts.new(%{metadata: %{device_id: device_id}})
 
     if connected?(socket) do
       PubSub.subscribe(MediaStream.PubSub, "listening_history")
@@ -73,7 +74,7 @@ defmodule MediaStreamWeb.HistoryLive do
   end
 
   @impl true
-  def handle_info({:history_updated, entry}, socket) do
+  def handle_info({:event, "listening_history", %Comn.Events.EventStruct{type: :history_updated, data: entry}}, socket) do
     history = upsert_history(socket.assigns.history, entry)
     filtered = filter_history(history, socket.assigns.search_query)
 

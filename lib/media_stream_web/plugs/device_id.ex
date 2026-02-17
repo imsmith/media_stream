@@ -4,6 +4,8 @@ defmodule MediaStreamWeb.Plugs.DeviceId do
 
   This allows the same device_id to be used across page loads and tabs,
   enabling PubSub-based playback state synchronization.
+
+  Also initializes a Comn.Contexts for the HTTP request process.
   """
 
   import Plug.Conn
@@ -11,14 +13,16 @@ defmodule MediaStreamWeb.Plugs.DeviceId do
   def init(opts), do: opts
 
   def call(conn, _opts) do
-    case get_session(conn, "device_id") do
-      nil ->
-        device_id = generate_device_id()
-        put_session(conn, "device_id", device_id)
+    device_id =
+      case get_session(conn, "device_id") do
+        nil -> generate_device_id()
+        existing -> existing
+      end
 
-      _existing ->
-        conn
-    end
+    Comn.Contexts.new(%{metadata: %{device_id: device_id}})
+
+    conn
+    |> put_session("device_id", device_id)
   end
 
   defp generate_device_id do
